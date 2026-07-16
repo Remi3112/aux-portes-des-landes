@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Aux Portes des Landes — Centrale de gestion
 
 Application interne connectée en direct à la base Airtable de la conciergerie,
@@ -281,3 +282,7 @@ apdl-app/
 Pour toute question sur le fonctionnement des tables Airtable elles-mêmes,
 consulte les descriptions ajoutées directement dans Airtable (visibles en
 survolant chaque table/champ), ou l'onglet **Aide / FAQ** de l'application.
+=======
+# aux-portes-des-landes
+Appli de CRM , PMS 
+>>>>>>> 4e4f87e82ef2afcfd83ce7d14cc19d598b959f02
