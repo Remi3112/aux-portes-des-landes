@@ -4,6 +4,7 @@ const db = require("../src/db");
 const airtable = require("../src/airtable");
 const slack = require("../src/slack");
 const ai = require("../src/ai");
+const email = require("../src/email");
 const { requireAuth, requireAdmin } = require("../src/auth");
 const { TABLES, TABLE_ORDER, ACCESS_LEVELS, permFor } = require("../src/tables");
 
@@ -42,6 +43,12 @@ router.get("/integrations", requireAuth, (req, res) => {
       connected: !!(sl.botToken && (sl.channels || []).length),
     },
     ai: { model: aiCfg.model, tokenPreview: maskToken(aiCfg.apiKey), connected: !!aiCfg.apiKey },
+    email: {
+      user: data.integrations.email.user || "",
+      fromName: data.integrations.email.fromName || "Aux Portes des Landes",
+      tokenPreview: maskToken(data.integrations.email.appPassword),
+      connected: !!(data.integrations.email.user && data.integrations.email.appPassword),
+    },
   });
 });
 
@@ -104,13 +111,36 @@ router.post("/integrations/ai", requireAdmin, async (req, res) => {
   }
 });
 
+// Compte Gmail (mot de passe d'application) utilise pour envoyer les emails
+// de validation de compte a l'inscription (voir routes/auth.js -> /signup).
+router.post("/integrations/email", requireAdmin, async (req, res) => {
+  const { user, appPassword, fromName } = req.body || {};
+  if (!user || !appPassword) return res.status(400).json({ error: "Adresse Gmail et mot de passe d'application requis." });
+  try {
+    await email.testConnection(user.trim(), appPassword.trim());
+    const data = db.load();
+    data.integrations.email = {
+      user: user.trim(),
+      appPassword: appPassword.trim(),
+      fromName: (fromName || "Aux Portes des Landes").trim(),
+      connected: true,
+    };
+    db.save(data);
+    db.addActivity({ type: "integration_saved", user: req.session.user.username, table: "email" });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: "Connexion Gmail impossible : " + e.message });
+  }
+});
+
 router.delete("/integrations/:name", requireAdmin, (req, res) => {
   const { name } = req.params;
-  if (!["airtable", "slack", "ai"].includes(name)) return res.status(404).json({ error: "Intégration inconnue." });
+  if (!["airtable", "slack", "ai", "email"].includes(name)) return res.status(404).json({ error: "Intégration inconnue." });
   const data = db.load();
   if (name === "airtable") data.integrations.airtable = { token: "", baseId: "", connected: false };
   if (name === "slack") data.integrations.slack = { botToken: "", channels: [], connected: false };
   if (name === "ai") data.integrations.ai = { provider: "anthropic", apiKey: "", model: data.integrations.ai.model, connected: false };
+  if (name === "email") data.integrations.email = { user: "", appPassword: "", fromName: data.integrations.email.fromName, connected: false };
   db.save(data);
   db.addActivity({ type: "integration_removed", user: req.session.user.username, table: name });
   res.json({ ok: true });

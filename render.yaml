@@ -25,3 +25,9 @@ services:
         sync: false
       - key: EXTRA_USERS
         sync: false
+      - key: EMAIL_USER
+        sync: false
+      - key: EMAIL_APP_PASSWORD
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: Aux Portes des Landes

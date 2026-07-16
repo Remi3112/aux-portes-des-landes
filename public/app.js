@@ -45,6 +45,7 @@ async function api(method, url, body){
   if(!res.ok){
     const err = new Error(json.error || ("Erreur "+res.status));
     err.status = res.status;
+    err.code = json.code;
     throw err;
   }
   return json;
@@ -281,11 +282,15 @@ function renderLogin(prefillError){
         <div class="roleTab" data-role="prestataire">Prestataire ménage</div>
       </div>
       <div class="loginErr" id="loginErr" style="${prefillError?'display:block':''}">${esc(prefillError||"")}</div>
+      <div id="resendVerifBox" style="display:none;margin-bottom:10px;">
+        <button class="btn small secondary" id="resendVerifBtn" type="button">Renvoyer l'email de validation</button>
+      </div>
       <div class="field"><label>Identifiant</label><input id="loginUser" type="text" autocomplete="username"></div>
       <div class="field"><label>Mot de passe</label>${pwField("loginPass", {autocomplete:"current-password"})}</div>
       <button class="btn" id="loginBtn" style="width:100%;">Se connecter</button>
-      <div style="text-align:center;margin-top:12px;">
+      <div style="text-align:center;margin-top:12px;display:flex;justify-content:center;gap:16px;flex-wrap:wrap;">
         <a href="#" id="forgotPwLink" style="font-size:12.5px;color:var(--accent);text-decoration:underline;">Mot de passe oublié ?</a>
+        <a href="#" id="goSignupLink" style="font-size:12.5px;color:var(--accent);text-decoration:underline;">Créer un compte</a>
       </div>
       <div class="loginHint" id="forgotPwPanel" style="display:none;">
         Lance <code>reset-password.bat</code> (Windows) ou <code>reset-password.sh</code> (Mac/Linux)
@@ -300,6 +305,7 @@ function renderLogin(prefillError){
     const panel = el.querySelector("#forgotPwPanel");
     panel.style.display = panel.style.display==="none" ? "block" : "none";
   };
+  el.querySelector("#goSignupLink").onclick = (e)=>{ e.preventDefault(); renderSignup(); };
   let selectedRole = "admin";
   el.querySelectorAll(".roleTab").forEach(tab=>{
     tab.onclick = ()=>{
@@ -312,7 +318,9 @@ function renderLogin(prefillError){
     const username = el.querySelector("#loginUser").value.trim();
     const password = el.querySelector("#loginPass").value;
     const errBox = el.querySelector("#loginErr");
+    const resendBox = el.querySelector("#resendVerifBox");
     errBox.style.display = "none";
+    resendBox.style.display = "none";
     if(!username || !password){ errBox.textContent="Merci de renseigner l'identifiant et le mot de passe."; errBox.style.display="block"; return; }
     try{
       const { user } = await api("POST", "/api/auth/login", { username, password, role: selectedRole });
@@ -320,10 +328,80 @@ function renderLogin(prefillError){
       await boot();
     }catch(e){
       errBox.textContent = e.message; errBox.style.display="block";
+      if(e.code === "EMAIL_NOT_VERIFIED"){
+        resendBox.style.display = "block";
+        el.querySelector("#resendVerifBtn").onclick = async ()=>{
+          try{ await api("POST", "/api/auth/resend-verification", { username }); showToast("Email de validation renvoyé."); }
+          catch(err){ alert(err.message); }
+        };
+      }
     }
   };
   el.querySelector("#loginBtn").onclick = doLogin;
   el.querySelector("#loginPass").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
+}
+
+/* =========================================================================
+   INSCRIPTION (creation de compte publique, avec validation par email)
+   ========================================================================= */
+function renderSignup(){
+  const el = document.getElementById("loginScreen");
+  el.style.display = "flex";
+  document.getElementById("app").style.display = "none";
+  el.innerHTML = `
+    <div class="loginBox">
+      <h1>Créer un compte</h1>
+      <p class="sub">Aux Portes des Landes — Centrale de gestion</p>
+      <div class="loginErr" id="signupErr"></div>
+      <div class="field"><label>Nom complet</label><input id="suName" placeholder="ex: Marie Dupont"></div>
+      <div class="field"><label>Adresse email</label><input id="suEmail" type="email" placeholder="ex: marie@exemple.com"></div>
+      <div class="field"><label>Identifiant</label><input id="suUsername" autocomplete="username"></div>
+      <div class="field"><label>Mot de passe</label>${pwField("suPassword", {autocomplete:"new-password"})}</div>
+      <div class="field"><label>Confirmation du mot de passe</label>${pwField("suPassword2", {autocomplete:"new-password"})}</div>
+      <div class="field"><label>Profil</label>
+        <select id="suRole">
+          <option value="collaborateur">Collaborateur</option>
+          <option value="prestataire">Prestataire ménage</option>
+          <option value="admin">Administrateur</option>
+        </select>
+      </div>
+      <div class="field"><label>Téléphone (optionnel)</label><input id="suPhone" placeholder="0600000000"></div>
+      <button class="btn" id="signupBtn" style="width:100%;">Créer le compte</button>
+      <div style="text-align:center;margin-top:12px;">
+        <a href="#" id="backToLoginLink" style="font-size:12.5px;color:var(--accent);text-decoration:underline;">← Retour à la connexion</a>
+      </div>
+      <div class="loginHint">Un email de confirmation est envoyé à l'adresse renseignée : le compte reste
+      inutilisable tant que le lien reçu n'a pas été cliqué (valable 24h). Pour un prestataire ménage,
+      utilise exactement le même prénom que dans la table "Agents de ménage" pour que son planning
+      s'affiche automatiquement.</div>
+    </div>`;
+  el.querySelector("#backToLoginLink").onclick = (e)=>{ e.preventDefault(); renderLogin(); };
+  el.querySelector("#signupBtn").onclick = async ()=>{
+    const name = el.querySelector("#suName").value.trim();
+    const emailAddr = el.querySelector("#suEmail").value.trim();
+    const username = el.querySelector("#suUsername").value.trim();
+    const password = el.querySelector("#suPassword").value;
+    const password2 = el.querySelector("#suPassword2").value;
+    const role = el.querySelector("#suRole").value;
+    const phone = el.querySelector("#suPhone").value.trim();
+    const errBox = el.querySelector("#signupErr");
+    errBox.style.display = "none";
+    if(!name || !emailAddr || !username || !password){ errBox.textContent="Merci de remplir tous les champs obligatoires."; errBox.style.display="block"; return; }
+    if(password.length < 6){ errBox.textContent="Le mot de passe doit contenir au moins 6 caractères."; errBox.style.display="block"; return; }
+    if(password !== password2){ errBox.textContent="Les deux mots de passe ne correspondent pas."; errBox.style.display="block"; return; }
+    try{
+      await api("POST", "/api/auth/signup", { name, email: emailAddr, username, password, role, phone });
+      el.innerHTML = `
+        <div class="loginBox">
+          <h1>Compte créé</h1>
+          <p class="sub">Vérifie ta boîte mail (${esc(emailAddr)}) pour activer ton compte, puis reviens te connecter.</p>
+          <button class="btn" id="backToLoginBtn" style="width:100%;">Retour à la connexion</button>
+        </div>`;
+      el.querySelector("#backToLoginBtn").onclick = ()=> renderLogin();
+    }catch(e){
+      errBox.textContent = e.message; errBox.style.display="block";
+    }
+  };
 }
 
 /* =========================================================================
@@ -1298,6 +1376,20 @@ async function renderSettings(){
         <button class="btn small" id="saveAi">Tester & enregistrer</button>
         ${integ.ai.connected?'<button class="btn small danger" id="delAi" style="margin-left:8px;">Déconnecter</button>':''}
       </div>
+      <div class="integCard">
+        <h4>✉️ Email (validation des inscriptions) ${integ.email.connected?'<span class="pill ok">connecté</span>':'<span class="pill off">non connecté</span>'}</h4>
+        <p class="desc">Compte Gmail utilisé pour envoyer les emails de confirmation quand quelqu'un crée un compte
+        (lien "Créer un compte" sur l'écran de connexion). Utilise un <b>mot de passe d'application</b> Google
+        (Compte Google &gt; Sécurité &gt; Validation en deux étapes &gt; Mots de passe des applications),
+        jamais ton mot de passe Gmail habituel.</p>
+        <div class="modalGrid">
+          <div class="field"><label>Adresse Gmail</label><input id="emailUser" value="${esc(integ.email.user||'')}" placeholder="ex: contact@gmail.com"></div>
+          <div class="field"><label>Mot de passe d'application</label>${pwField("emailAppPass", {placeholder: integ.email.tokenPreview||'xxxx xxxx xxxx xxxx'})}</div>
+          <div class="field"><label>Nom d'expéditeur</label><input id="emailFromName" value="${esc(integ.email.fromName||'Aux Portes des Landes')}"></div>
+        </div>
+        <button class="btn small" id="saveEmail">Tester & enregistrer</button>
+        ${integ.email.connected?'<button class="btn small danger" id="delEmail" style="margin-left:8px;">Déconnecter</button>':''}
+      </div>
     </div>`;
   }
   const usersHtml = CURRENT_USER.role==="admin" ? await renderUsersSection() : "";
@@ -1350,7 +1442,12 @@ async function renderSettings(){
       apiKey: document.getElementById("aiKey").value.trim(),
       model: document.getElementById("aiModel").value.trim(),
     });
-    ["Airtable","Slack","Ai"].forEach(n=>{
+    document.getElementById("saveEmail").onclick = ()=> saveIntegration("email", {
+      user: document.getElementById("emailUser").value.trim(),
+      appPassword: document.getElementById("emailAppPass").value.trim(),
+      fromName: document.getElementById("emailFromName").value.trim(),
+    });
+    ["Airtable","Slack","Ai","Email"].forEach(n=>{
       const btn = document.getElementById("del"+n);
       if(btn) btn.onclick = async ()=>{
         if(!confirm("Déconnecter cette intégration ?")) return;
@@ -1464,14 +1561,16 @@ async function renderUsersSection(){
   const { users } = await api("GET", "/api/auth/users");
   return `<div class="card"><h3 style="margin-top:0;">Utilisateurs (${users.length})</h3>
     <p class="desc">Renseigne un numéro de téléphone pour qu'un compte apparaisse dans Messagerie WhatsApp &gt; Collaborateurs.</p>
-    <table class="dataTable"><thead><tr><th>Nom</th><th>Identifiant</th><th>Profil</th><th>Téléphone</th><th></th></tr></thead><tbody>
+    <table class="dataTable"><thead><tr><th>Nom</th><th>Identifiant</th><th>Profil</th><th>Statut</th><th>Téléphone</th><th></th></tr></thead><tbody>
     ${users.map(u=>`<tr data-user-id="${u.id}">
       <td>${esc(u.name)}</td>
       <td>${esc(u.username)}</td>
       <td><span class="pill">${roleLabel(u.role)}</span></td>
+      <td>${u.emailVerified?'<span class="pill ok">actif</span>':'<span class="pill off">en attente de validation</span>'}</td>
       <td><input class="userPhoneInput" value="${esc(u.phone||'')}" placeholder="0600000000" style="width:130px;padding:5px 8px;font-size:12.5px;"></td>
-      <td style="display:flex;gap:6px;">
+      <td style="display:flex;gap:6px;flex-wrap:wrap;">
         <button class="btn small secondary" data-save-phone="${u.id}">Enregistrer</button>
+        ${!u.emailVerified?`<button class="btn small secondary" data-mark-verified="${u.id}" title="Activer manuellement (email de validation perdu ou non reçu)">Marquer vérifié</button>`:''}
         ${u.username!=='admin'?`<button class="btn small danger" data-del="${u.id}">Supprimer</button>`:''}
       </td>
     </tr>`).join("")}
@@ -1512,6 +1611,10 @@ document.addEventListener("click", async (e)=>{
     try{ await api("DELETE", `/api/auth/users/${e.target.dataset.del}`); renderApp(); }
     catch(err){ alert(err.message); }
   }
+  if(e.target && e.target.dataset && e.target.dataset.markVerified){
+    try{ await api("PATCH", `/api/auth/users/${e.target.dataset.markVerified}`, { emailVerified: true }); showToast("Compte activé."); renderApp(); }
+    catch(err){ alert(err.message); }
+  }
 });
 
 /* =========================================================================
@@ -1538,11 +1641,16 @@ async function boot(){
 }
 
 (async function init(){
+  const params = new URLSearchParams(location.search);
+  const verified = params.get("verified");
+  if(verified !== null) history.replaceState({}, "", location.pathname);
   try{
     const { user } = await api("GET", "/api/auth/me");
     CURRENT_USER = user;
     await boot();
   }catch(e){
     renderLogin();
+    if(verified === "1") showToast("Compte activé ! Tu peux te connecter.");
+    if(verified === "0") showToast("Lien de validation invalide ou expiré — utilise \"Renvoyer l'email de validation\" après une tentative de connexion.");
   }
 })();

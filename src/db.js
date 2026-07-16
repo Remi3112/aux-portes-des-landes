@@ -29,6 +29,9 @@ function defaultData() {
       // via un selecteur de canal.
       slack: { botToken: "", channels: [], connected: false },
       ai: { provider: "anthropic", apiKey: "", model: "claude-haiku-4-5-20251001", connected: false },
+      // Compte Gmail (mot de passe d'application) utilise pour envoyer les
+      // emails de validation de compte a l'inscription (voir src/email.js).
+      email: { user: "", appPassword: "", fromName: "Aux Portes des Landes", connected: false },
     },
     activityLog: [],
     slackMessagesCache: [],
@@ -97,6 +100,7 @@ function load() {
         airtable: { ...def.integrations.airtable, ...(data.integrations && data.integrations.airtable) },
         slack: migrateSlackConfig(data.integrations && data.integrations.slack),
         ai: { ...def.integrations.ai, ...(data.integrations && data.integrations.ai) },
+        email: { ...def.integrations.email, ...(data.integrations && data.integrations.email) },
       },
       whatsappTemplates: Array.isArray(data.whatsappTemplates) ? data.whatsappTemplates : def.whatsappTemplates,
       formLinks: Array.isArray(data.formLinks) ? data.formLinks : def.formLinks,
@@ -261,6 +265,19 @@ function seedFromEnv() {
       data.integrations.ai = { provider: "anthropic", apiKey: process.env.ANTHROPIC_API_KEY, model, connected: true };
       changed = true;
       console.log("[env] Assistant IA (re)connecte depuis les variables d'environnement.");
+    }
+  }
+
+  if (process.env.EMAIL_USER && process.env.EMAIL_APP_PASSWORD) {
+    const fromName = process.env.EMAIL_FROM_NAME || data.integrations.email.fromName || "Aux Portes des Landes";
+    if (
+      data.integrations.email.user !== process.env.EMAIL_USER ||
+      data.integrations.email.appPassword !== process.env.EMAIL_APP_PASSWORD ||
+      data.integrations.email.fromName !== fromName
+    ) {
+      data.integrations.email = { user: process.env.EMAIL_USER, appPassword: process.env.EMAIL_APP_PASSWORD, fromName, connected: true };
+      changed = true;
+      console.log("[env] Envoi d'email (re)connecte depuis les variables d'environnement.");
     }
   }
 

@@ -110,12 +110,15 @@ apdl-app/
   "version": 2,
   "users": [
     { "id": "uuid", "username": "admin", "name": "...", "role": "admin|collaborateur|prestataire",
-      "phone": "0612345678", "passwordHash": "bcrypt...", "mustChangePassword": true, "createdAt": "ISO" }
+      "phone": "0612345678", "email": "...", "emailVerified": true,
+      "verifyToken": "... (absent une fois verifie)", "verifyTokenExpires": 1234567890,
+      "passwordHash": "bcrypt...", "mustChangePassword": true, "createdAt": "ISO" }
   ],
   "integrations": {
     "airtable": { "token": "pat...", "baseId": "app...", "connected": true },
     "slack": { "botToken": "xoxb-...", "channels": [{ "id": "C...", "name": "..." }], "connected": true },
-    "ai": { "provider": "anthropic", "apiKey": "sk-ant-...", "model": "claude-haiku-4-5-20251001", "connected": true }
+    "ai": { "provider": "anthropic", "apiKey": "sk-ant-...", "model": "claude-haiku-4-5-20251001", "connected": true },
+    "email": { "user": "contact@gmail.com", "appPassword": "xxxx xxxx xxxx xxxx", "fromName": "Aux Portes des Landes", "connected": true }
   },
   "activityLog": [ { "type": "login|create|update|delete|integration_saved|...", "user": "...", "at": "ISO", "table": "..." } ],
   "slackMessagesCache": [],  // present pour compat, non utilise activement
@@ -353,6 +356,14 @@ insuffisant, `404` ressource/table inconnue, `409` intégration non configurée,
 | `GET /api/auth/activity` | admin | 100 dernières entrées du journal |
 | `GET /api/auth/team-contacts` | admin/collab | `{id,name,role,phone}` de tous les comptes ayant un téléphone (pour le hub Messagerie WhatsApp) |
 
+Inscription publique et validation par email (aucune session requise) :
+
+| Méthode & route | Accès | Description |
+|---|---|---|
+| `POST /api/auth/signup` | public | `{username,password,name,email,role,phone?}` — crée un compte non activé et envoie l'email de validation |
+| `GET /api/auth/verify-email?token=...` | public | active le compte puis redirige vers `/?verified=1` (ou `0` si jeton invalide/expiré) |
+| `POST /api/auth/resend-verification` | public | `{username}` — renvoie un nouveau lien si le compte n'est pas encore activé |
+
 ### Enregistrements Airtable (`routes/records.js`)
 | Méthode & route | Accès | Description |
 |---|---|---|
@@ -370,7 +381,8 @@ insuffisant, `404` ressource/table inconnue, `409` intégration non configurée,
 | `POST /api/settings/integrations/airtable` | admin | `{token,baseId}` — teste puis enregistre |
 | `POST /api/settings/integrations/slack` | admin | `{botToken,channels:[{id,name}]}` — dédoublonne par id |
 | `POST /api/settings/integrations/ai` | admin | `{apiKey,model?}` |
-| `DELETE /api/settings/integrations/:name` | admin | `airtable\|slack\|ai` — réinitialise |
+| `POST /api/settings/integrations/email` | admin | `{user,appPassword,fromName?}` — compte Gmail (mot de passe d'application) pour les emails de validation |
+| `DELETE /api/settings/integrations/:name` | admin | `airtable\|slack\|ai\|email` — réinitialise |
 | `GET /api/settings/whatsapp-templates` | connecté (équipe) | liste des modèles WhatsApp |
 | `POST /api/settings/whatsapp-templates` | admin | `{name,body}` |
 | `PUT /api/settings/whatsapp-templates/:id` | admin | `{name?,body?}` |
@@ -517,6 +529,38 @@ l'affichage de la liste ; chaque ligne réutilise `openWaComposer(contact)`
 
 ---
 
+### 9.6 Inscription publique + validation par email — `src/email.js`, `routes/auth.js`
+
+`POST /api/auth/signup` (public, aucune session requise) cree un compte avec
+`emailVerified: false`, un `verifyToken` aleatoire (32 octets hex,
+`crypto.randomBytes`) valable 24h, et envoie un email contenant le lien
+`GET /api/auth/verify-email?token=...` via `src/email.js` (Gmail SMTP par
+`nodemailer`, mot de passe d'application). Si l'envoi echoue, le compte n'est
+**pas** enregistre (evite les comptes fantomes impossibles a activer).
+
+`POST /api/auth/login` refuse la connexion (`403`, `code: "EMAIL_NOT_VERIFIED"`)
+tant que `emailVerified !== true`. Absence du champ (comptes crees avant cette
+fonctionnalite, via `POST /users` par un admin, ou via `EXTRA_USERS`/`seedFromEnv`)
+est traitee comme verifie — `publicUser()` calcule `emailVerified: u.emailVerified !== false`,
+donc seuls les comptes explicitement `false` (issus de `/signup`) sont bloques.
+
+`POST /api/auth/resend-verification` regenere un jeton pour un compte non
+verifie (utile si l'email est perdu/expire). `PATCH /api/auth/users/:id`
+accepte en plus un `emailVerified: true` (admin uniquement) : filet de
+securite pour activer un compte a la main si l'integration email n'est pas
+configuree ou que l'envoi echoue durablement — visible cote frontend via le
+bouton "Marquer vérifié" sur les comptes "en attente de validation" dans
+Paramètres > Utilisateurs.
+
+`src/email.js` expose `testConnection()` (verifie les identifiants SMTP,
+utilise par `POST /api/settings/integrations/email`) et `sendMail()`. En mode
+test (`EMAIL_TEST_MODE=1`, positionne par `test/e2e.js`), aucun envoi reel
+n'a lieu : le contenu est pousse dans `testOutbox` (tableau expose par le
+module) pour que les tests puissent extraire le jeton de validation sans
+boite mail reelle.
+
+---
+
 ## 10. Frontend — `public/app.js`
 
 Fichier unique, pas de build. Organisation interne (recherche par commentaire de
@@ -558,7 +602,7 @@ pour savoir quelles tables/champs/permissions afficher — il reflète directeme
 
 ## 11. Tests — `test/e2e.js`
 
-Suite de bout en bout unique (`node test/e2e.js`), 105 assertions. Lance le
+Suite de bout en bout unique (`node test/e2e.js`), 123 assertions. Lance le
 **vrai** serveur Express (vraie session, vrai bcrypt, vrai stockage JSON) sur le
 port 3999, et intercepte `globalThis.fetch` pour simuler Airtable/Slack/Anthropic
 (aucun appel réseau réel) — seuls les appels vers `localhost:3999` passent par le
@@ -570,8 +614,10 @@ scoping, notifications Slack automatiques, sélecteurs de champs liés, assistan
 IA, messagerie Slack multi-canaux, dashboard (CA, occupation, activité du jour),
 modèles WhatsApp et liens de formulaires (CRUD + permissions + audience),
 droits d'accès (lecture, surcharge, réinitialisation, niveaux invalides),
-contacts d'équipe et téléphone sur les comptes utilisateurs, et l'invalidation
-de session après déconnexion.
+contacts d'équipe et téléphone sur les comptes utilisateurs, inscription
+publique et validation par email (signup, doublons, jeton invalide/valide,
+renvoi, activation manuelle par un admin), et l'invalidation de session après
+déconnexion.
 
 **Toujours relancer `node test/e2e.js` après une modification** de `src/tables.js`,
 `routes/*.js` ou `src/fileSessionStore.js` avant de livrer — c'est le seul filet

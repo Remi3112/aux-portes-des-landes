@@ -11,6 +11,7 @@
  * appel reseau reel). A lancer avec : node test/e2e.js
  */
 process.env.PORT = "3999";
+process.env.EMAIL_TEST_MODE = "1"; // src/email.js n'envoie pas de vrai email, juste testOutbox
 const BASE = "http://localhost:3999";
 const TEST_BASE_ID = "appTESTBASE0001";
 
@@ -53,6 +54,7 @@ if (fs.existsSync(sessionsDir)) {
 }
 
 const { TABLES } = require(path.join(APP_DIR, "src", "tables"));
+const emailModule = require(path.join(APP_DIR, "src", "email"));
 
 const TODAY = new Date();
 const TODAY_STR = String(TODAY.getDate()).padStart(2, "0") + "/" + String(TODAY.getMonth() + 1).padStart(2, "0") + "/" + TODAY.getFullYear();
@@ -486,6 +488,76 @@ async function run() {
   ok(adminContact && adminContact.phone === "0611223344", "le telephone mis a jour apparait dans les contacts internes");
   r = await call("PATCH", `/api/auth/users/${adminId}`, { phone: "" }, collabCookie);
   ok(r.status === 403, "un collaborateur ne peut pas modifier le telephone d'un autre compte (reserve admin)");
+
+  console.log("\n== TEST 16f: Inscription publique + validation par email ==");
+  emailModule.testOutbox.length = 0;
+  r = await call("POST", "/api/auth/signup", {
+    name: "Julie Nouvelle", email: "julie.nouvelle@example.com", username: "julienouvelle",
+    password: "MotDePasse1", role: "collaborateur", phone: "0600000001",
+  });
+  ok(r.status === 200, "l'inscription publique renvoie 200");
+  ok(emailModule.testOutbox.length === 1, "un email de validation a ete 'envoye' (mode test)");
+  r = await call("POST", "/api/auth/login", { username: "julienouvelle", password: "MotDePasse1" });
+  ok(r.status === 403 && r.json.code === "EMAIL_NOT_VERIFIED", "la connexion est refusee tant que l'email n'est pas valide");
+
+  r = await call("POST", "/api/auth/signup", {
+    name: "Doublon", email: "julie.nouvelle@example.com", username: "autreidentifiant",
+    password: "MotDePasse1", role: "collaborateur",
+  });
+  ok(r.status === 409, "impossible de s'inscrire deux fois avec la meme adresse email");
+  r = await call("POST", "/api/auth/signup", {
+    name: "Doublon2", email: "autre@example.com", username: "julienouvelle",
+    password: "MotDePasse1", role: "collaborateur",
+  });
+  ok(r.status === 409, "impossible de s'inscrire deux fois avec le meme identifiant");
+  r = await call("POST", "/api/auth/signup", {
+    name: "Role invalide", email: "roleinvalide@example.com", username: "roleinvalide",
+    password: "MotDePasse1", role: "superadmin",
+  });
+  ok(r.status === 400, "un profil invalide est rejete a l'inscription");
+  r = await call("POST", "/api/auth/signup", {
+    name: "Mdp court", email: "mdpcourt@example.com", username: "mdpcourt",
+    password: "abc", role: "prestataire",
+  });
+  ok(r.status === 400, "un mot de passe trop court est rejete a l'inscription");
+
+  const verifMail = emailModule.testOutbox.find((m) => m.to === "julie.nouvelle@example.com");
+  const tokenMatch = verifMail && verifMail.html.match(/token=([a-f0-9]+)/);
+  ok(!!tokenMatch, "le lien de validation contient un jeton");
+  const verifyToken = tokenMatch ? tokenMatch[1] : "";
+
+  let rawRes = await realFetch(BASE + "/api/auth/verify-email?token=jetoninvalide", { redirect: "manual" });
+  ok(rawRes.status === 302 && rawRes.headers.get("location") === "/?verified=0", "un jeton invalide redirige vers ?verified=0");
+
+  rawRes = await realFetch(BASE + `/api/auth/verify-email?token=${verifyToken}`, { redirect: "manual" });
+  ok(rawRes.status === 302 && rawRes.headers.get("location") === "/?verified=1", "un jeton valide redirige vers ?verified=1");
+
+  r = await call("POST", "/api/auth/login", { username: "julienouvelle", password: "MotDePasse1", role: "collaborateur" });
+  ok(r.status === 200 && r.json.user.emailVerified === true, "la connexion fonctionne une fois l'email valide");
+  const julieCookie = r.cookie;
+  await call("POST", "/api/auth/logout", null, julieCookie);
+
+  console.log("\n== TEST 16g: Renvoi de l'email de validation + activation manuelle par un admin ==");
+  emailModule.testOutbox.length = 0;
+  r = await call("POST", "/api/auth/signup", {
+    name: "Pierre Prestataire", email: "pierre.prestataire@example.com", username: "pierreprest",
+    password: "MotDePasse1", role: "prestataire",
+  });
+  ok(r.status === 200, "deuxieme inscription publique reussie (role prestataire)");
+  r = await call("POST", "/api/auth/resend-verification", { username: "pierreprest" });
+  ok(r.status === 200, "le renvoi de l'email de validation fonctionne");
+  ok(emailModule.testOutbox.length === 2, "un deuxieme email a bien ete renvoye");
+  r = await call("POST", "/api/auth/resend-verification", { username: "julienouvelle" });
+  ok(r.status === 400, "impossible de renvoyer un email de validation pour un compte deja actif");
+
+  r = await call("GET", "/api/auth/users", null, adminCookie);
+  const pierre = r.json.users.find((u) => u.username === "pierreprest");
+  ok(pierre && pierre.emailVerified === false, "le compte en attente apparait bien comme non verifie cote admin");
+  r = await call("PATCH", `/api/auth/users/${pierre.id}`, { emailVerified: true }, adminCookie);
+  ok(r.status === 200 && r.json.user.emailVerified === true, "un admin peut activer manuellement un compte en attente (filet de securite)");
+  r = await call("POST", "/api/auth/login", { username: "pierreprest", password: "MotDePasse1", role: "prestataire" });
+  ok(r.status === 200, "la connexion fonctionne apres activation manuelle par un admin");
+  await call("POST", "/api/auth/logout", null, r.cookie);
 
   console.log("\n== TEST 17: Deconnexion et securite de session ==");
   r = await call("POST", "/api/auth/logout", null, adminCookie);

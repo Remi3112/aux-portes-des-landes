@@ -26,6 +26,9 @@ sur ton propre ordinateur (ou un petit serveur), sans dépendre d'un service tie
   code (voir section 12)
 - Messagerie WhatsApp centralisée : Propriétaires, Agents de ménage,
   Voyageurs, Collaborateurs (voir section 13)
+- Création de compte en libre-service (Admin, Collaborateur, Prestataire
+  ménage) avec validation par email avant la première connexion (voir
+  section 15)
 - Toutes les données de connexion (jetons Airtable/Slack/IA, utilisateurs)
   restent stockées **uniquement sur ton poste**, dans `data/db.json`
 
@@ -253,7 +256,43 @@ son numéro de téléphone dans **Paramètres > Utilisateurs**.
 
 ---
 
-## 14. Déploiement en ligne (lien accessible sans installation)
+## 14. Création de compte en libre-service (validation par email)
+
+En plus des comptes créés manuellement par un admin (section 5), n'importe
+qui disposant du lien de l'application peut créer son propre compte via
+**Créer un compte** sur l'écran de connexion — y compris un compte
+Administrateur. Le compte reste **inutilisable tant que l'adresse email n'a
+pas été confirmée** : un email avec un lien de validation (valable 24h) est
+envoyé automatiquement.
+
+### Configuration requise (une seule fois, admin)
+
+Dans **Paramètres > Intégrations > Email**, renseigne un compte Gmail :
+
+1. Active la validation en deux étapes sur ce compte Google si ce n'est pas
+   déjà fait (myaccount.google.com/security).
+2. Génère un **mot de passe d'application** :
+   myaccount.google.com/apppasswords → choisis "Autre" comme application,
+   donne-lui un nom (ex: "Aux Portes des Landes"), copie le mot de passe
+   généré (16 caractères).
+3. Renseigne l'adresse Gmail et ce mot de passe (pas le mot de passe habituel
+   du compte Google) dans Paramètres > Intégrations > Email, puis **Tester &
+   enregistrer**.
+
+Tant que cette intégration n'est pas configurée, les inscriptions échouent
+avec un message clair invitant à contacter un administrateur.
+
+### Si l'email de validation n'arrive pas
+
+- La personne peut cliquer sur **Renvoyer l'email de validation** après une
+  tentative de connexion infructueuse sur son propre compte.
+- Un admin peut aussi activer le compte manuellement depuis **Paramètres >
+  Utilisateurs** (bouton **Marquer vérifié** sur les comptes "en attente de
+  validation") — utile si l'email n'a pas pu partir ou a été perdu.
+
+---
+
+## 15. Déploiement en ligne (lien accessible sans installation)
 
 Pour donner un simple lien (URL) que chacun peut ouvrir dans son navigateur
 sans installer Node ni cloner le dépôt, l'application doit tourner en
