@@ -412,16 +412,23 @@ async function run() {
 
   console.log("\n== TEST 16: Modeles WhatsApp et liens de formulaires ==");
   r = await call("GET", "/api/settings/whatsapp-templates", null, adminCookie);
-  ok(r.status === 200 && r.json.templates.length === 5, "5 modeles WhatsApp sont preconfigures par defaut");
+  ok(r.status === 200 && r.json.templates.length === 21, "21 modeles WhatsApp sont preconfigures par defaut (voyageur/proprietaire/prestataire/collaborateur)");
+  ok(r.json.templates.every(t => !!t.audience), "chaque modele preconfigure a bien un champ audience");
+  const audienceCounts = {};
+  r.json.templates.forEach(t => { audienceCounts[t.audience] = (audienceCounts[t.audience]||0) + 1; });
+  ok(audienceCounts.voyageur >= 4 && audienceCounts.proprietaire >= 4 && audienceCounts.prestataire >= 4 && audienceCounts.collaborateur >= 4, "les 4 categories (voyageur/proprietaire/prestataire/collaborateur) ont chacune plusieurs modeles dedies");
   r = await call("GET", "/api/settings/whatsapp-templates", null, prestaCookie);
   ok(r.status === 403, "un prestataire n'a pas acces aux modeles WhatsApp");
   r = await call("POST", "/api/settings/whatsapp-templates", { name: "Test", body: "Bonjour {{prenom}}" }, collabCookie);
   ok(r.status === 403, "un collaborateur ne peut pas creer de modele WhatsApp (reserve admin)");
-  r = await call("POST", "/api/settings/whatsapp-templates", { name: "Test", body: "Bonjour {{prenom}}" }, adminCookie);
-  ok(r.status === 200 && r.json.template.id, "l'admin peut creer un nouveau modele WhatsApp");
+  r = await call("POST", "/api/settings/whatsapp-templates", { name: "Test", body: "Bonjour {{prenom}}", audience: "prestataire" }, adminCookie);
+  ok(r.status === 200 && r.json.template.id && r.json.template.audience === "prestataire", "l'admin peut creer un nouveau modele WhatsApp avec une audience");
   const newTplId = r.json.template.id;
-  r = await call("PUT", `/api/settings/whatsapp-templates/${newTplId}`, { name: "Test modifie", body: "Salut {{prenom}} !" }, adminCookie);
-  ok(r.status === 200 && r.json.template.name === "Test modifie", "l'admin peut modifier un modele WhatsApp existant");
+  r = await call("POST", "/api/settings/whatsapp-templates", { name: "Test audience invalide", body: "Bonjour", audience: "n-importe-quoi" }, adminCookie);
+  ok(r.status === 200 && r.json.template.audience === "tous", "une audience de modele invalide retombe sur 'tous'");
+  await call("DELETE", `/api/settings/whatsapp-templates/${r.json.template.id}`, null, adminCookie);
+  r = await call("PUT", `/api/settings/whatsapp-templates/${newTplId}`, { name: "Test modifie", body: "Salut {{prenom}} !", audience: "collaborateur" }, adminCookie);
+  ok(r.status === 200 && r.json.template.name === "Test modifie" && r.json.template.audience === "collaborateur", "l'admin peut modifier un modele WhatsApp existant (dont son audience)");
   r = await call("DELETE", `/api/settings/whatsapp-templates/${newTplId}`, null, adminCookie);
   ok(r.status === 200, "l'admin peut supprimer un modele WhatsApp");
   r = await call("GET", "/api/settings/form-links", null, adminCookie);

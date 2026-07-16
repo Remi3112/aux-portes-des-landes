@@ -38,14 +38,52 @@ function defaultData() {
     // Modeles de messages WhatsApp reutilisables (Parametres > Modeles WhatsApp).
     // Placeholders disponibles dans "body" : {{prenom}} {{nom}} {{logement}}
     // {{checkin}} {{checkout}} {{lien_formulaire}} — remplaces cote frontend
-    // au moment de composer le message pour un contact precis.
+    // au moment de composer le message pour un contact precis. Chaque modele
+    // a un "audience" (voyageur/prestataire/proprietaire/collaborateur/tous)
+    // qui determine dans quel(s) composeur(s) WhatsApp il apparait (meme
+    // principe que "audience" sur formLinks juste en dessous).
+    //
+    // Attention : {{prenom}} et {{checkin}}/{{checkout}} ne sont pas toujours
+    // renseignes selon la fiche source (ex. Proprietaires n'a qu'un champ
+    // "Nom - Prenom" combine, sans prenom separe) — fillTemplate() laisse le
+    // texte "{{xxx}}" tel quel si la valeur est absente, donc les modeles
+    // "proprietaire" et "prestataire" evitent volontairement {{prenom}} et
+    // {{checkin}}/{{checkout}}.
     whatsappTemplates: [
-      { id: "tpl-bienvenue", name: "Bienvenue avant l'arrivee", body: "Bonjour {{prenom}}, merci pour votre reservation chez {{logement}} ! Nous avons hate de vous accueillir le {{checkin}}. Voici le formulaire d'accueil a completer avant votre arrivee : {{lien_formulaire}}\nN'hesitez pas si vous avez la moindre question 😊" },
-      { id: "tpl-checkin", name: "Instructions d'arrivee", body: "Bonjour {{prenom}}, votre logement {{logement}} est pret ! Voici les instructions d'acces : [a completer]. Bon sejour !" },
-      { id: "tpl-checkout", name: "Rappel avant le depart", body: "Bonjour {{prenom}}, petit rappel : votre check-out est prevu le {{checkout}}. Merci de laisser les cles a l'endroit convenu. Merci pour votre sejour chez {{logement}} !" },
-      { id: "tpl-avis", name: "Demande d'avis apres le sejour", body: "Bonjour {{prenom}}, nous esperons que votre sejour chez {{logement}} s'est bien passe ! Si vous avez apprecie, cela nous aiderait beaucoup que vous laissiez un avis. Merci encore et a bientot !" },
-      { id: "tpl-formulaire", name: "Envoi d'un lien de formulaire", body: "Bonjour {{prenom}}, voici le lien du formulaire a completer : {{lien_formulaire}}\nMerci !" },
+      // --- Voyageurs ---
+      { id: "tpl-bienvenue", name: "Bienvenue avant l'arrivee", audience: "voyageur", body: "Bonjour {{prenom}}, merci pour votre reservation chez {{logement}} ! Nous avons hate de vous accueillir le {{checkin}}. Voici le formulaire d'accueil a completer avant votre arrivee : {{lien_formulaire}}\nN'hesitez pas si vous avez la moindre question 😊" },
+      { id: "tpl-checkin", name: "Instructions d'arrivee", audience: "voyageur", body: "Bonjour {{prenom}}, votre logement {{logement}} est pret ! Voici les instructions d'acces : [a completer]. Bon sejour !" },
+      { id: "tpl-checkout", name: "Rappel avant le depart", audience: "voyageur", body: "Bonjour {{prenom}}, petit rappel : votre check-out est prevu le {{checkout}}. Merci de laisser les cles a l'endroit convenu. Merci pour votre sejour chez {{logement}} !" },
+      { id: "tpl-avis", name: "Demande d'avis apres le sejour", audience: "voyageur", body: "Bonjour {{prenom}}, nous esperons que votre sejour chez {{logement}} s'est bien passe ! Si vous avez apprecie, cela nous aiderait beaucoup que vous laissiez un avis. Merci encore et a bientot !" },
+      { id: "tpl-voyageur-confirmation", name: "Confirmation de reservation", audience: "voyageur", body: "Bonjour {{prenom}}, votre reservation chez {{logement}} est bien confirmee, avec une arrivee prevue le {{checkin}}. Nous revenons vers vous prochainement avec toutes les informations utiles. A tres bientot !" },
+      { id: "tpl-voyageur-urgence", name: "Probleme pendant le sejour", audience: "voyageur", body: "Bonjour {{prenom}}, nous avons bien pris en compte votre message concernant {{logement}}. Nous nous en occupons au plus vite et revenons vers vous tres rapidement. Merci de votre patience !" },
+      // --- Proprietaires (pas de {{prenom}} : certaines fiches n'ont qu'un nom complet) ---
+      { id: "tpl-proprio-nouvelle-reservation", name: "Nouvelle reservation recue", audience: "proprietaire", body: "Bonjour {{nom}}, bonne nouvelle : une nouvelle reservation vient d'etre enregistree pour votre logement {{logement}}. Nous vous tiendrons informe(e) a l'approche du sejour. Belle journee !" },
+      { id: "tpl-proprio-rapport-menage", name: "Rapport de menage / etat des lieux", audience: "proprietaire", body: "Bonjour {{nom}}, le menage vient d'etre effectue chez {{logement}}. Tout est en ordre, aucune anomalie a signaler. N'hesitez pas si vous avez la moindre question." },
+      { id: "tpl-proprio-bilan", name: "Bilan mensuel d'activite", audience: "proprietaire", body: "Bonjour {{nom}}, voici un point rapide sur l'activite de {{logement}} ce mois-ci. Nous revenons vers vous avec le detail complet (reservations, occupation, revenus). Bonne journee !" },
+      { id: "tpl-proprio-incident", name: "Signalement d'un incident", audience: "proprietaire", body: "Bonjour {{nom}}, nous souhaitions vous informer d'un incident survenu au niveau de {{logement}}. Nous revenons vers vous rapidement avec plus de details et la solution proposee." },
+      { id: "tpl-proprio-disponibilite", name: "Question sur le logement", audience: "proprietaire", body: "Bonjour {{nom}}, nous avons une question concernant {{logement}} et souhaiterions avoir votre retour quand vous aurez un instant. Merci d'avance !" },
+      // --- Prestataires menage (pas de {{checkin}}/{{checkout}} : non disponibles pour ces fiches) ---
+      { id: "tpl-prestataire-planning", name: "Rappel d'intervention prevue", audience: "prestataire", body: "Bonjour {{prenom}}, un rappel pour l'intervention menage prevue chez {{logement}}. Merci de nous confirmer votre disponibilite. Merci !" },
+      { id: "tpl-prestataire-remplacement", name: "Demande de remplacement urgent", audience: "prestataire", body: "Bonjour {{prenom}}, serait-il possible de faire un menage en urgence chez {{logement}} ? Merci de nous dire au plus vite si vous etes disponible." },
+      { id: "tpl-prestataire-confirmation", name: "Confirmation d'intervention", audience: "prestataire", body: "Bonjour {{prenom}}, merci pour l'intervention chez {{logement}} ! Tout est bien note de notre cote. Bonne continuation." },
+      { id: "tpl-prestataire-acces", name: "Rappel infos d'acces (boite a cles)", audience: "prestataire", body: "Bonjour {{prenom}}, petit rappel des infos d'acces pour {{logement}} : [code boite a cles a completer]. Merci et bonne intervention !" },
+      { id: "tpl-prestataire-paiement", name: "Info paiement de la prestation", audience: "prestataire", body: "Bonjour {{prenom}}, le reglement de votre prestation chez {{logement}} a bien ete traite. N'hesitez pas si vous avez la moindre question. Merci pour votre travail !" },
+      // --- Collaborateurs (equipe interne) ---
+      { id: "tpl-collab-notif-interne", name: "Notification interne", audience: "collaborateur", body: "Bonjour {{prenom}}, une nouvelle information necessite ton attention. Peux-tu jeter un oeil des que possible ? Merci !" },
+      { id: "tpl-collab-rappel-tache", name: "Rappel de tache", audience: "collaborateur", body: "Bonjour {{prenom}}, petit rappel concernant une tache en attente de ton cote. Merci de faire un point quand tu peux." },
+      { id: "tpl-collab-planning-equipe", name: "Info planning equipe", audience: "collaborateur", body: "Bonjour {{prenom}}, voici une mise a jour du planning equipe. Merci de en prendre connaissance et de me dire si besoin d'ajustement." },
+      { id: "tpl-collab-urgent", name: "Message urgent equipe", audience: "collaborateur", body: "Bonjour {{prenom}}, besoin de toi rapidement sur un sujet en cours. Peux-tu me rappeler ou repondre des que possible ? Merci !" },
+      // --- Generique (tous profils) ---
+      { id: "tpl-formulaire", name: "Envoi d'un lien de formulaire", audience: "tous", body: "Bonjour {{nom}}, voici le lien du formulaire a completer : {{lien_formulaire}}\nMerci !" },
     ],
+    // Version du "seed" par defaut des modeles WhatsApp ci-dessus. Permet a
+    // load() de fusionner (une seule fois, de maniere additive) les nouveaux
+    // modeles dans les installations DEJA deployees dont data/db.json a un
+    // whatsappTemplates plus ancien — sans dupliquer a chaque redemarrage et
+    // sans jamais resusciter un modele que l'utilisateur a supprime
+    // volontairement (voir migrateWhatsappTemplates() plus bas).
+    whatsappTemplatesSeedVersion: 2,
     // Liens vers des formulaires Airtable (Parametres > Liens de formulaires),
     // reutilisables dans les modeles WhatsApp via {{lien_formulaire}}. Chaque
     // lien a un "audience" (voyageur/prestataire/proprietaire/tous) qui
@@ -79,6 +117,47 @@ function migrateSlackConfig(slackCfg) {
   return { botToken: slackCfg.botToken || "", channels: [], connected: !!slackCfg.connected };
 }
 
+/**
+ * Migration additive des modeles WhatsApp par defaut (Parametres > Modeles
+ * WhatsApp). Une installation deja deployee a un whatsappTemplates deja
+ * peuple (ancienne version) : on n'ecrase jamais son contenu, on se contente
+ * d'AJOUTER les nouveaux modeles par defaut qui n'existent pas encore (par
+ * id), une seule fois par palier de version (whatsappTemplatesSeedVersion).
+ * Un modele que l'utilisateur a renomme, modifie ou supprime n'est jamais
+ * touche ni resuscite.
+ */
+function migrateWhatsappTemplates(existingTemplates, storedSeedVersion) {
+  const def = defaultData();
+  // Cle totalement absente du fichier (installation neuve, ou fichier ecrit
+  // par un outil externe sans ce champ) : on part directement de tous les
+  // modeles par defaut, plutot que de considerer ca comme "deja a jour".
+  if (existingTemplates === undefined) {
+    return { templates: def.whatsappTemplates.map((t) => ({ ...t })), seedVersion: def.whatsappTemplatesSeedVersion, changed: true };
+  }
+  const current = Array.isArray(existingTemplates) ? existingTemplates.slice() : def.whatsappTemplates.map((t) => ({ ...t }));
+  const seenIds = new Set(current.map((t) => t.id));
+  // Absence de version stockee = installation anterieure a l'ajout de
+  // l'audience (palier 1). Un tableau explicitement vide (utilisateur ayant
+  // tout supprime) avec une version deja a jour reste vide, volontairement.
+  const fromVersion = Number.isInteger(storedSeedVersion) ? storedSeedVersion : 1;
+  let changed = false;
+  if (fromVersion < def.whatsappTemplatesSeedVersion) {
+    def.whatsappTemplates.forEach((tpl) => {
+      if (!seenIds.has(tpl.id)) {
+        current.push(tpl);
+        seenIds.add(tpl.id);
+        changed = true;
+      }
+    });
+  }
+  // Retro-compatibilite : les modeles crees avant l'ajout du champ "audience"
+  // n'en ont pas -> traites comme "tous" (visibles dans tous les composeurs).
+  current.forEach((t) => {
+    if (!t.audience) t.audience = "tous";
+  });
+  return { templates: current, seedVersion: def.whatsappTemplatesSeedVersion, changed };
+}
+
 function ensureFile() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(DB_FILE)) {
@@ -93,6 +172,7 @@ function load() {
     const data = JSON.parse(raw);
     // fusion defensive avec les valeurs par defaut si un champ manque (mise a jour de version)
     const def = defaultData();
+    const tplMigration = migrateWhatsappTemplates(data.whatsappTemplates, data.whatsappTemplatesSeedVersion);
     const merged = {
       ...def,
       ...data,
@@ -102,10 +182,17 @@ function load() {
         ai: { ...def.integrations.ai, ...(data.integrations && data.integrations.ai) },
         email: { ...def.integrations.email, ...(data.integrations && data.integrations.email) },
       },
-      whatsappTemplates: Array.isArray(data.whatsappTemplates) ? data.whatsappTemplates : def.whatsappTemplates,
+      whatsappTemplates: tplMigration.templates,
+      whatsappTemplatesSeedVersion: tplMigration.seedVersion,
       formLinks: Array.isArray(data.formLinks) ? data.formLinks : def.formLinks,
       accessOverrides: (data.accessOverrides && typeof data.accessOverrides === "object" && !Array.isArray(data.accessOverrides)) ? data.accessOverrides : def.accessOverrides,
     };
+    // Persiste immediatement si la migration a ajoute de nouveaux modeles,
+    // pour ne pas la relancer (et re-detecter des "changements") a chaque
+    // simple lecture tant que le fichier n'est pas resauvegarde ailleurs.
+    if (tplMigration.changed) {
+      fs.writeFileSync(DB_FILE, JSON.stringify(merged, null, 2), "utf8");
+    }
     return merged;
   } catch (e) {
     console.error("[db] Erreur de lecture de data/db.json, reinitialisation :", e.message);

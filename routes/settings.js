@@ -9,6 +9,9 @@ const { requireAuth, requireAdmin } = require("../src/auth");
 const { TABLES, TABLE_ORDER, ACCESS_LEVELS, permFor } = require("../src/tables");
 
 const FORM_LINK_AUDIENCES = ["voyageur", "prestataire", "proprietaire", "collaborateur", "tous"];
+// Meme jeu de valeurs pour les modeles WhatsApp (Parametres > Modeles
+// WhatsApp) : determine dans quel(s) composeur(s) WhatsApp un modele apparait.
+const TEMPLATE_AUDIENCES = FORM_LINK_AUDIENCES;
 
 const router = express.Router();
 const crypto = require("crypto");
@@ -147,16 +150,20 @@ router.delete("/integrations/:name", requireAdmin, (req, res) => {
 });
 
 // ---- Modeles de messages WhatsApp (Parametres > Modeles WhatsApp) ----
+function cleanTemplateAudience(a) {
+  return TEMPLATE_AUDIENCES.includes(a) ? a : "tous";
+}
+
 router.get("/whatsapp-templates", requireAuth, requireTeamAccess, (req, res) => {
   const data = db.load();
   res.json({ templates: data.whatsappTemplates || [] });
 });
 
 router.post("/whatsapp-templates", requireAdmin, (req, res) => {
-  const { name, body } = req.body || {};
+  const { name, body, audience } = req.body || {};
   if (!name || !name.trim() || !body || !body.trim()) return res.status(400).json({ error: "Nom et texte du modèle requis." });
   const data = db.load();
-  const tpl = { id: crypto.randomUUID(), name: name.trim(), body: body.trim() };
+  const tpl = { id: crypto.randomUUID(), name: name.trim(), body: body.trim(), audience: cleanTemplateAudience(audience) };
   data.whatsappTemplates = [...(data.whatsappTemplates || []), tpl];
   db.save(data);
   db.addActivity({ type: "whatsapp_template_created", user: req.session.user.username, table: tpl.name });
@@ -164,13 +171,14 @@ router.post("/whatsapp-templates", requireAdmin, (req, res) => {
 });
 
 router.put("/whatsapp-templates/:id", requireAdmin, (req, res) => {
-  const { name, body } = req.body || {};
+  const { name, body, audience } = req.body || {};
   if (!name || !name.trim() || !body || !body.trim()) return res.status(400).json({ error: "Nom et texte du modèle requis." });
   const data = db.load();
   const tpl = (data.whatsappTemplates || []).find((t) => t.id === req.params.id);
   if (!tpl) return res.status(404).json({ error: "Modèle introuvable." });
   tpl.name = name.trim();
   tpl.body = body.trim();
+  tpl.audience = cleanTemplateAudience(audience);
   db.save(data);
   res.json({ template: tpl });
 });

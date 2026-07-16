@@ -184,8 +184,9 @@ function fillTemplate(body, ctx){
   return String(body||"").replace(/\{\{(\w+)\}\}/g, (m, key)=> (ctx[key]!==undefined && ctx[key]!==null && ctx[key]!=="") ? ctx[key] : m);
 }
 async function openWaComposer(contact){
-  const { templates, links: allLinks } = await loadWaTemplatesAndLinks();
+  const { templates: allTemplates, links: allLinks } = await loadWaTemplatesAndLinks();
   const audience = contact.audience || "voyageur";
+  const templates = allTemplates.filter(t=> !t.audience || t.audience==="tous" || t.audience===audience);
   const links = allLinks.filter(l=> !l.audience || l.audience==="tous" || l.audience===audience);
   const ctx = { prenom: contact.prenom||"", nom: contact.nom||"", logement: contact.logement||"", checkin: contact.checkin||"", checkout: contact.checkout||"" };
   const overlay = document.createElement("div");
@@ -632,18 +633,32 @@ function renderRowsInto(containerId, key, records, withCount, linkedLabels){
  * partir d'un enregistrement, pour n'importe quelle table dotee d'un
  * waConfig (voir src/tables.js) — permet d'ouvrir le composeur WhatsApp
  * depuis n'importe quelle fiche ayant un numero de telephone. */
-function buildContactFromRecord(tbl, rec){
+function buildContactFromRecord(tbl, rec, linkedLabels){
   const wc = tbl.waConfig;
   if(!wc || !rec) return null;
   const phone = rawTextValue("phoneNumber", rec.fields[wc.phone]);
   if(!phone) return null;
   const get = (fid)=> fid ? rawTextValue(fieldType(tbl, fid), rec.fields[fid]) : "";
+  // Cas particulier "logement" : c'est presque toujours un champ lie
+  // (multipleRecordLinks) vers la table Logements — la valeur brute est alors
+  // un ou plusieurs IDs d'enregistrement (recXXXXXXXXXXXXXX), pas un nom
+  // lisible. On resout via linkedLabels (meme mecanisme que displayValue()),
+  // pour afficher "Villa les Resiniers" au lieu de l'ID technique.
+  function getLogement(fid){
+    if(!fid) return "";
+    const raw = rec.fields[fid];
+    if(fieldType(tbl, fid) === "multipleRecordLinks" && Array.isArray(raw)){
+      const labelMap = (linkedLabels && linkedLabels[fid]) || {};
+      return raw.map(id=> labelMap[id] || id).join(", ");
+    }
+    return get(fid);
+  }
   return {
     id: rec.id,
     prenom: get(wc.prenom),
     nom: get(wc.nom),
     phone,
-    logement: get(wc.logement),
+    logement: getLogement(wc.logement),
     checkin: get(wc.checkin),
     checkout: get(wc.checkout),
     waUrl: waLinkFromPhone(phone, ""),
@@ -658,7 +673,7 @@ async function openDetailModal(key, rec, linkedLabels){
   const isNew = !rec;
   const canWrite = isNew ? can(key,"create") : can(key,"update");
   const canDelete = !isNew && can(key,"delete");
-  const waContact = !isNew ? buildContactFromRecord(tbl, rec) : null;
+  const waContact = !isNew ? buildContactFromRecord(tbl, rec, linkedLabels) : null;
   const overlay = document.createElement("div");
   overlay.className = "modalOverlay";
   const fieldsToShow = tbl.detailFields.filter(fid=>{
@@ -897,8 +912,8 @@ async function loadWaHubTab(){
     } else {
       const tbl = CONFIG.tables[tabDef.tableKey];
       if(!tbl){ box.innerHTML = `<div class="emptyState">Ce module n'est pas accessible à ton profil.</div>`; WA_HUB_CONTACTS = []; return; }
-      const { records } = await api("GET", `/api/records/${tabDef.tableKey}`);
-      WA_HUB_CONTACTS = records.map(r=>buildContactFromRecord(tbl, r)).filter(Boolean);
+      const { records, linkedLabels } = await api("GET", `/api/records/${tabDef.tableKey}`);
+      WA_HUB_CONTACTS = records.map(r=>buildContactFromRecord(tbl, r, linkedLabels)).filter(Boolean);
     }
     renderWaHubList(WA_HUB_CONTACTS);
   }catch(e){
@@ -1244,13 +1259,18 @@ async function renderSettings(){
     const { templates } = await api("GET", "/api/settings/whatsapp-templates");
     const { links } = await api("GET", "/api/settings/form-links");
     const { tables: accessRows } = await api("GET", "/api/settings/access-rights");
+    const AUDIENCE_LABELS = { voyageur: "🧳 Voyageurs", prestataire: "🧹 Prestataires ménage", proprietaire: "🏠 Propriétaires", collaborateur: "👤 Collaborateurs", tous: "👥 Tous" };
+    function audienceOptions(current){
+      return Object.entries(AUDIENCE_LABELS).map(([v,label])=>`<option value="${v}" ${v===(current||"tous")?"selected":""}>${esc(label)}</option>`).join("");
+    }
     waTemplatesHtml = `
     <div class="card"><h3 style="margin-top:0;">Modèles de messages WhatsApp</h3>
-      <p class="desc">Utilisables depuis Contacts voyageurs pour composer un message prêt à envoyer. Insère <code>{{prenom}}</code>, <code>{{nom}}</code>, <code>{{logement}}</code>, <code>{{checkin}}</code>, <code>{{checkout}}</code> ou <code>{{lien_formulaire}}</code> dans le texte : ils sont remplacés automatiquement au moment d'envoyer.</p>
+      <p class="desc">Utilisables depuis Contacts voyageurs et la Messagerie WhatsApp pour composer un message prêt à envoyer. Insère <code>{{prenom}}</code>, <code>{{nom}}</code>, <code>{{logement}}</code>, <code>{{checkin}}</code>, <code>{{checkout}}</code> ou <code>{{lien_formulaire}}</code> dans le texte : ils sont remplacés automatiquement au moment d'envoyer. « À qui » détermine dans quel(s) composeur(s) WhatsApp le modèle apparaît (voyageur, propriétaire, prestataire ménage, collaborateur, ou tous).</p>
       <div id="waTemplatesList">
         ${templates.map(t=>`
         <div class="integCard" data-tpl-id="${esc(t.id)}">
           <div class="field"><label>Nom</label><input class="tplName" value="${esc(t.name)}"></div>
+          <div class="field"><label>À qui</label><select class="tplAudience">${audienceOptions(t.audience)}</select></div>
           <div class="field"><label>Message</label><textarea class="tplBody" rows="3">${esc(t.body)}</textarea></div>
           <button class="btn small" data-save-tpl="${esc(t.id)}">Enregistrer</button>
           <button class="btn small danger" data-del-tpl="${esc(t.id)}" style="margin-left:8px;">Supprimer</button>
@@ -1259,14 +1279,11 @@ async function renderSettings(){
       <div class="integCard">
         <h4>+ Nouveau modèle</h4>
         <div class="field"><label>Nom</label><input id="newTplName" placeholder="ex: Message de bienvenue"></div>
+        <div class="field"><label>À qui</label><select id="newTplAudience">${audienceOptions("tous")}</select></div>
         <div class="field"><label>Message</label><textarea id="newTplBody" rows="3" placeholder="Bonjour {{prenom}}, ..."></textarea></div>
         <button class="btn small" id="addTplBtn">Ajouter</button>
       </div>
     </div>`;
-    const AUDIENCE_LABELS = { voyageur: "🧳 Voyageurs", prestataire: "🧹 Prestataires ménage", proprietaire: "🏠 Propriétaires", collaborateur: "👤 Collaborateurs", tous: "👥 Tous" };
-    function audienceOptions(current){
-      return Object.entries(AUDIENCE_LABELS).map(([v,label])=>`<option value="${v}" ${v===(current||"tous")?"selected":""}>${esc(label)}</option>`).join("");
-    }
     formLinksHtml = `
     <div class="card"><h3 style="margin-top:0;">Liens de formulaires Airtable</h3>
       <p class="desc">Réutilisables dans les modèles WhatsApp via <code>{{lien_formulaire}}</code>, et sélectionnables lors de l'envoi d'un message. « À qui » détermine dans quels envois WhatsApp le lien apparaît (voyageur, prestataire, propriétaire, ou tous).</p>
@@ -1458,8 +1475,9 @@ async function renderSettings(){
     document.getElementById("addTplBtn").onclick = async ()=>{
       const name = document.getElementById("newTplName").value.trim();
       const body = document.getElementById("newTplBody").value.trim();
+      const audience = document.getElementById("newTplAudience").value;
       if(!name || !body){ showToast("Nom et message requis."); return; }
-      try{ await api("POST", "/api/settings/whatsapp-templates", { name, body }); showToast("Modèle ajouté."); renderApp(); }
+      try{ await api("POST", "/api/settings/whatsapp-templates", { name, body, audience }); showToast("Modèle ajouté."); renderApp(); }
       catch(e){ alert(e.message); }
     };
     document.getElementById("waTemplatesList").addEventListener("click", async (e)=>{
@@ -1468,8 +1486,9 @@ async function renderSettings(){
         const row = e.target.closest("[data-tpl-id]");
         const name = row.querySelector(".tplName").value.trim();
         const body = row.querySelector(".tplBody").value.trim();
+        const audience = row.querySelector(".tplAudience").value;
         if(!name || !body){ showToast("Nom et message requis."); return; }
-        try{ await api("PUT", `/api/settings/whatsapp-templates/${saveId}`, { name, body }); showToast("Modèle enregistré."); }
+        try{ await api("PUT", `/api/settings/whatsapp-templates/${saveId}`, { name, body, audience }); showToast("Modèle enregistré."); }
         catch(err){ alert(err.message); }
       }
       if(delId){
