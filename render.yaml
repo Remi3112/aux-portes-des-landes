@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: apdl-centrale-gestion
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: ADMIN_NAME
+        value: Administrateur
+      - key: AIRTABLE_TOKEN
+        sync: false
+      - key: AIRTABLE_BASE_ID
+        sync: false
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_CHANNELS
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: EXTRA_USERS
+        sync: false

@@ -253,6 +253,63 @@ son numéro de téléphone dans **Paramètres > Utilisateurs**.
 
 ---
 
+## 14. Déploiement en ligne (lien accessible sans installation)
+
+Pour donner un simple lien (URL) que chacun peut ouvrir dans son navigateur
+sans installer Node ni cloner le dépôt, l'application doit tourner en
+permanence sur un serveur en ligne plutôt que sur ton ordinateur.
+
+### Option retenue : Render.com, plan gratuit
+
+⚠️ **Le plan gratuit de Render n'a pas de disque persistant.** Le contenu de
+`data/db.json` (comptes créés dans l'appli, modèles WhatsApp modifiés, liens
+de formulaires, droits d'accès personnalisés...) peut être **réinitialisé** à
+chaque fois que le service redémarre (mise en veille après inactivité,
+redéploiement...). Pour que ce ne soit pas bloquant, les réglages essentiels
+peuvent être **restaurés automatiquement à chaque démarrage** via des
+variables d'environnement (voir plus bas) : le compte admin et les
+intégrations Airtable/Slack/IA ne sont donc jamais perdus, même après une
+réinitialisation. Les comptes créés à la main depuis l'écran **Utilisateurs**
+(en dehors de `EXTRA_USERS`), ainsi que les modèles WhatsApp/liens de
+formulaires/droits d'accès modifiés depuis l'appli, eux, ne survivent pas à
+une réinitialisation sur le plan gratuit.
+
+### Étapes
+
+1. Crée un compte sur [render.com](https://render.com) (gratuit).
+2. **New +** → **Blueprint** → connecte ton dépôt GitHub
+   `aux-portes-des-landes`. Render détecte automatiquement `render.yaml` à la
+   racine du projet et propose de créer le service.
+3. Avant de déployer, renseigne dans les variables d'environnement (Render te
+   les demande, ou Paramètres > Environment une fois le service créé) :
+   - `AIRTABLE_TOKEN`, `AIRTABLE_BASE_ID` (voir section 2)
+   - `SLACK_BOT_TOKEN`, `SLACK_CHANNELS` au format `id1:Nom 1,id2:Nom 2` (optionnel, voir section 3)
+   - `ANTHROPIC_API_KEY` (optionnel, voir section 4)
+   - `EXTRA_USERS` (optionnel) : comptes équipe à recréer automatiquement à
+     chaque démarrage, au format JSON, par exemple :
+     ```json
+     [{"username":"julie","password":"MotDePasse123","name":"Julie","role":"collaborateur","phone":"0600000000"}]
+     ```
+   - `ADMIN_PASSWORD` est généré automatiquement par Render (visible dans
+     l'onglet **Environment** du service) — c'est le mot de passe du compte
+     `admin`, toujours valable même après une réinitialisation.
+4. Clique sur **Deploy**. Render donne une URL du type
+   `https://apdl-centrale-gestion.onrender.com` — c'est ce lien qu'il faut
+   partager, aucune installation nécessaire côté utilisateur.
+5. Le service se redéploie automatiquement à chaque `git push` sur `main`
+   (voir `push-update.ps1`).
+
+### Limite importante à connaître
+
+Sur le plan gratuit, le service se met en veille après 15 minutes sans
+requête : le premier chargement après une veille peut prendre 30 à 60
+secondes (le temps que le service se réveille). Pour un usage plus
+professionnel (équipe qui l'utilise toute la journée, données qui doivent
+absolument persister), il faudra passer sur un plan payant avec disque
+persistant (~7$/mois) — demande-moi si tu veux basculer dessus plus tard.
+
+---
+
 ## Structure du projet
 
 ```

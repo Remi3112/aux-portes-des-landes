@@ -26,6 +26,10 @@ function getOrCreateSessionSecret() {
 
 // Premier demarrage : cree le compte admin si besoin (affiche le mot de passe temporaire une seule fois).
 db.seedAdminIfNeeded();
+// Hebergement sans disque persistant (ex: Render free) : restaure a chaque
+// demarrage les comptes/integrations definis par variables d'environnement.
+// N'a aucun effet si ces variables ne sont pas definies (installation locale).
+db.seedFromEnv();
 
 const app = express();
 app.disable("x-powered-by");

@@ -148,4 +148,124 @@ function addActivity(entry) {
   save(data);
 }
 
-module.exports = { load, save, seedAdminIfNeeded, addActivity, DB_FILE, DATA_DIR };
+/**
+ * (Re)seed depuis les variables d'environnement — utile pour un hebergement
+ * "gratuit" sans disque persistant (ex: Render free), ou le contenu de
+ * data/db.json peut etre efface a chaque redemarrage/reveil du service.
+ *
+ * N'a AUCUN effet si aucune des variables ci-dessous n'est definie : une
+ * installation locale classique (start.bat/start.sh) n'est jamais impactee.
+ *
+ * Variables reconnues :
+ *   ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_NAME
+ *     -> (re)cree le compte admin avec ce mot de passe fixe a chaque demarrage,
+ *        pour ne jamais rester bloque dehors apres une perte de donnees.
+ *   EXTRA_USERS
+ *     -> JSON : [{"username":"...","password":"...","name":"...","role":"collaborateur|prestataire","phone":"..."}]
+ *        (re)cree ces comptes supplementaires a chaque demarrage.
+ *   AIRTABLE_TOKEN, AIRTABLE_BASE_ID
+ *   SLACK_BOT_TOKEN, SLACK_CHANNELS ("id1:Nom 1,id2:Nom 2")
+ *   ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+ *     -> reconnecte automatiquement les integrations correspondantes.
+ */
+function seedFromEnv() {
+  const data = load();
+  let changed = false;
+  const bcrypt = require("bcryptjs");
+
+  function upsertUser({ username, password, name, role, phone }) {
+    if (!username || !password || !role) return;
+    const hash = bcrypt.hashSync(password, 10);
+    let u = data.users.find((x) => x.username === username);
+    if (!u) {
+      data.users.push({
+        id: crypto.randomUUID(),
+        username,
+        name: name || username,
+        role,
+        phone: phone || "",
+        passwordHash: hash,
+        mustChangePassword: false,
+        createdAt: new Date().toISOString(),
+      });
+      changed = true;
+      console.log(`[env] Compte "${username}" (${role}) recree depuis les variables d'environnement.`);
+    } else if (!bcrypt.compareSync(password, u.passwordHash)) {
+      u.passwordHash = hash;
+      u.mustChangePassword = false;
+      if (name) u.name = name;
+      if (phone) u.phone = phone;
+      changed = true;
+      console.log(`[env] Mot de passe de "${username}" resynchronise depuis les variables d'environnement.`);
+    }
+  }
+
+  if (process.env.ADMIN_PASSWORD) {
+    upsertUser({
+      username: process.env.ADMIN_USERNAME || "admin",
+      password: process.env.ADMIN_PASSWORD,
+      name: process.env.ADMIN_NAME || "Administrateur",
+      role: "admin",
+    });
+  }
+
+  if (process.env.EXTRA_USERS) {
+    try {
+      const extra = JSON.parse(process.env.EXTRA_USERS);
+      if (Array.isArray(extra)) extra.forEach(upsertUser);
+    } catch (e) {
+      console.error("[env] EXTRA_USERS invalide (JSON attendu) :", e.message);
+    }
+  }
+
+  if (process.env.AIRTABLE_TOKEN && process.env.AIRTABLE_BASE_ID) {
+    if (
+      data.integrations.airtable.token !== process.env.AIRTABLE_TOKEN ||
+      data.integrations.airtable.baseId !== process.env.AIRTABLE_BASE_ID
+    ) {
+      data.integrations.airtable = {
+        token: process.env.AIRTABLE_TOKEN,
+        baseId: process.env.AIRTABLE_BASE_ID,
+        connected: true,
+      };
+      changed = true;
+      console.log("[env] Integration Airtable (re)connectee depuis les variables d'environnement.");
+    }
+  }
+
+  if (process.env.SLACK_BOT_TOKEN) {
+    const channels = (process.env.SLACK_CHANNELS || "")
+      .split(",")
+      .map((entry) => {
+        const [id, name] = entry.split(":");
+        return { id: (id || "").trim(), name: (name || id || "").trim() };
+      })
+      .filter((c) => c.id);
+    const same =
+      data.integrations.slack.botToken === process.env.SLACK_BOT_TOKEN &&
+      JSON.stringify(data.integrations.slack.channels) === JSON.stringify(channels);
+    if (!same) {
+      data.integrations.slack = {
+        botToken: process.env.SLACK_BOT_TOKEN,
+        channels,
+        connected: channels.length > 0,
+      };
+      changed = true;
+      console.log("[env] Integration Slack (re)connectee depuis les variables d'environnement.");
+    }
+  }
+
+  if (process.env.ANTHROPIC_API_KEY) {
+    const model = process.env.ANTHROPIC_MODEL || data.integrations.ai.model || "claude-haiku-4-5-20251001";
+    if (data.integrations.ai.apiKey !== process.env.ANTHROPIC_API_KEY || data.integrations.ai.model !== model) {
+      data.integrations.ai = { provider: "anthropic", apiKey: process.env.ANTHROPIC_API_KEY, model, connected: true };
+      changed = true;
+      console.log("[env] Assistant IA (re)connecte depuis les variables d'environnement.");
+    }
+  }
+
+  if (changed) save(data);
+  return data;
+}
+
+module.exports = { load, save, seedAdminIfNeeded, seedFromEnv, addActivity, DB_FILE, DATA_DIR };
