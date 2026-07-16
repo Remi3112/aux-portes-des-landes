@@ -1,7 +1,0 @@
-node_modules/
-data/db.json
-data/.session-secret
-data/sessions/
-*.log
-.DS_Store
-Thumbs.db
