@@ -1,0 +1,18 @@
+node_modules/
+data/db.json
+data/.session-secret
+data/sessions/
+*.log
+.DS_Store
+Thumbs.db
+
+# Anciennes copies dupliquees du projet (filet de securite si non supprimees a la main)
+apdl-app/
+appV11/
+app V9/
+app V8/
+App V7/
+app-V6/
+AppV14/
+appV13/
+appv12/
