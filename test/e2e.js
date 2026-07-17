@@ -110,6 +110,11 @@ function nameKeyedToIdKeyed(tableId, fieldsByName) {
 }
 
 let mockCallLog = [];
+// Tables creees dynamiquement en cours de test via l'API meta Airtable (ex:
+// "Utilisateurs appli", creee automatiquement par src/usersStore.js la
+// premiere fois qu'un compte doit etre lu/ecrit alors qu'Airtable est
+// connecte) — simule fidelement la creation ET la persistance de schema.
+let mockDynamicTables = [];
 const realFetch = globalThis.fetch.bind(globalThis);
 
 globalThis.fetch = async function (url, options = {}) {
@@ -122,6 +127,21 @@ globalThis.fetch = async function (url, options = {}) {
   mockCallLog.push({ url: u, method: options.method || "GET", body: options.body });
 
   if (u.includes("api.airtable.com/v0/meta/bases/")) {
+    const method = (options.method || "GET").toUpperCase();
+    if (method === "POST") {
+      // Simule POST /meta/bases/{baseId}/tables : creation d'une nouvelle
+      // table (utilise par usersStore.ensureUsersTable()).
+      const body = JSON.parse(options.body || "{}");
+      const newTableId = "tblDyn" + crypto.randomBytes(6).toString("hex");
+      const newTable = {
+        id: newTableId,
+        name: body.name,
+        fields: (body.fields || []).map((f) => ({ id: "fldDyn" + crypto.randomBytes(6).toString("hex"), name: f.name, type: f.type })),
+      };
+      mockDynamicTables.push(newTable);
+      mockAirtable[newTableId] = [];
+      return jsonResponse(200, newTable);
+    }
     const tables = Object.values(TABLES).map((t) => ({
       id: t.tableId,
       name: t.label,
@@ -131,16 +151,26 @@ globalThis.fetch = async function (url, options = {}) {
         type: f.t,
         options: mockSchemaChoices[f.i] ? { choices: mockSchemaChoices[f.i] } : undefined,
       })),
-    }));
+    })).concat(mockDynamicTables);
     return jsonResponse(200, { tables });
   }
 
   if (u.includes("api.airtable.com/v0/")) {
     const afterV0 = u.split("api.airtable.com/v0/")[1];
-    const [, ...rest] = afterV0.split("/");
-    const tableId = rest.join("/").split("?")[0];
+    const pathOnly = afterV0.split("?")[0];
+    const pathParts = pathOnly.split("/"); // [baseId, tableId, recordId?]
+    const tableId = pathParts[1];
+    const recordId = pathParts[2];
     const method = (options.method || "GET").toUpperCase();
     if (!mockAirtable[tableId]) mockAirtable[tableId] = [];
+
+    // GET /{tableId}/{recordId} : lecture d'un enregistrement unique (utilise
+    // par usersStore.findUserById) — different de la liste paginee ci-dessous.
+    if (recordId && method === "GET") {
+      const rec = mockAirtable[tableId].find((r) => r.id === recordId);
+      if (!rec) return jsonResponse(404, { error: { type: "NOT_FOUND", message: "Record not found" } });
+      return jsonResponse(200, rec);
+    }
 
     if (method === "GET") {
       return jsonResponse(200, { records: mockAirtable[tableId] });

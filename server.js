@@ -24,13 +24,6 @@ function getOrCreateSessionSecret() {
   return secret;
 }
 
-// Premier demarrage : cree le compte admin si besoin (affiche le mot de passe temporaire une seule fois).
-db.seedAdminIfNeeded();
-// Hebergement sans disque persistant (ex: Render free) : restaure a chaque
-// demarrage les comptes/integrations definis par variables d'environnement.
-// N'a aucun effet si ces variables ne sont pas definies (installation locale).
-db.seedFromEnv();
-
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "2mb" }));
@@ -61,8 +54,27 @@ app.get("/api/version", (req, res) => {
 app.use(express.static(path.join(__dirname, "public")));
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
-app.listen(PORT, () => {
-  console.log(`\nAux Portes des Landes — Centrale de gestion`);
-  console.log(`→ Ouvre ton navigateur sur http://localhost:${PORT}\n`);
-  console.log(`Tu restes connecté automatiquement (30 jours) même après un redémarrage ou une mise à jour.`);
+// Le seeding des comptes (admin + variables d'environnement) peut impliquer
+// des appels reseau vers Airtable (des que la table "Utilisateurs appli" est
+// utilisee comme stockage persistant) : on demarre donc le serveur seulement
+// une fois ces etapes terminees, pour ne jamais servir de requete pendant
+// une migration de comptes en cours.
+async function start() {
+  // Premier demarrage : cree le compte admin si besoin (affiche le mot de passe temporaire une seule fois).
+  await db.seedAdminIfNeeded();
+  // Hebergement sans disque persistant (ex: Render free) : restaure a chaque
+  // demarrage les comptes/integrations definis par variables d'environnement.
+  // N'a aucun effet si ces variables ne sont pas definies (installation locale).
+  await db.seedFromEnv();
+
+  app.listen(PORT, () => {
+    console.log(`\nAux Portes des Landes — Centrale de gestion`);
+    console.log(`→ Ouvre ton navigateur sur http://localhost:${PORT}\n`);
+    console.log(`Tu restes connecté automatiquement (30 jours) même après un redémarrage ou une mise à jour.`);
+  });
+}
+
+start().catch((e) => {
+  console.error("Erreur fatale au demarrage :", e);
+  process.exit(1);
 });

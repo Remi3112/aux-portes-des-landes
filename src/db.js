@@ -13,6 +13,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const usersStore = require("./usersStore");
 
 const DATA_DIR = path.join(__dirname, "..", "data");
 const DB_FILE = path.join(DATA_DIR, "db.json");
@@ -21,6 +22,10 @@ function defaultData() {
   return {
     version: 2,
     users: [],
+    // Passe a true des qu'une migration des comptes locaux vers la table
+    // Airtable "Utilisateurs appli" a ete effectuee (voir plus bas) — evite
+    // de relancer la migration (et de dupliquer des comptes) a chaque appel.
+    usersAirtableMigrated: false,
     integrations: {
       airtable: { token: "", baseId: "", connected: false },
       // "channels" : liste de canaux Slack connectes en meme temps, ex.
@@ -186,6 +191,7 @@ function load() {
       whatsappTemplatesSeedVersion: tplMigration.seedVersion,
       formLinks: Array.isArray(data.formLinks) ? data.formLinks : def.formLinks,
       accessOverrides: (data.accessOverrides && typeof data.accessOverrides === "object" && !Array.isArray(data.accessOverrides)) ? data.accessOverrides : def.accessOverrides,
+      usersAirtableMigrated: !!data.usersAirtableMigrated,
     };
     // Persiste immediatement si la migration a ajoute de nouveaux modeles,
     // pour ne pas la relancer (et re-detecter des "changements") a chaque
@@ -207,21 +213,131 @@ function save(data) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf8");
 }
 
-function seedAdminIfNeeded() {
+/**
+ * Abstraction "comptes utilisateurs" : bascule automatiquement entre le
+ * stockage local (data/db.json, tant qu'Airtable n'est pas connecte) et la
+ * table Airtable dediee "Utilisateurs appli" (des qu'Airtable est connecte
+ * — voir src/usersStore.js). Utilisee par src/auth.js et routes/auth.js :
+ * aucun de ces fichiers ne touche plus jamais data.users directement.
+ *
+ * Interet : sur un hebergement gratuit sans disque persistant (Render free
+ * par exemple), data/db.json peut etre efface a chaque mise a jour/reveil
+ * du service — mais des qu'Airtable est connecte, les comptes crees dans
+ * l'application (admin/collaborateur/prestataire) sont stockes dans
+ * Airtable et ne sont donc plus jamais perdus.
+ */
+function airtableCfgIfConnected(data) {
+  const at = data.integrations.airtable;
+  return at && at.token && at.baseId ? { token: at.token, baseId: at.baseId } : null;
+}
+
+async function migrateLocalUsersToAirtableIfNeeded(data, cfg) {
+  if (data.usersAirtableMigrated) return;
+  if (data.users && data.users.length) {
+    console.log(`[users] Migration de ${data.users.length} compte(s) local(aux) vers la table Airtable "${usersStore.TABLE_NAME}"...`);
+    for (const u of data.users) {
+      try {
+        const existing = await usersStore.findUserByUsername(cfg, u.username);
+        if (existing) continue; // deja migre (ex: tentative precedente partiellement reussie)
+        await usersStore.createUser(cfg, {
+          username: u.username,
+          name: u.name,
+          role: u.role,
+          phone: u.phone || "",
+          email: u.email || "",
+          emailVerified: u.emailVerified !== false,
+          passwordHash: u.passwordHash,
+          mustChangePassword: !!u.mustChangePassword,
+          litigeFormUrl: u.litigeFormUrl || "",
+          verifyToken: u.verifyToken,
+          verifyTokenExpires: u.verifyTokenExpires,
+        });
+      } catch (e) {
+        console.error(`[users] Echec de migration du compte "${u.username}" vers Airtable :`, e.message);
+      }
+    }
+  }
+  data.usersAirtableMigrated = true;
+  save(data);
+  console.log(`[users] Comptes desormais geres via Airtable (table "${usersStore.TABLE_NAME}") — persistants meme sans disque local.`);
+}
+
+async function ensureUsersBackend() {
   const data = load();
-  if (data.users.length === 0) {
+  const cfg = airtableCfgIfConnected(data);
+  if (cfg) {
+    await migrateLocalUsersToAirtableIfNeeded(data, cfg);
+    return { mode: "airtable", cfg, data };
+  }
+  return { mode: "local", data };
+}
+
+async function listUsers() {
+  const { mode, cfg, data } = await ensureUsersBackend();
+  return mode === "airtable" ? usersStore.listUsers(cfg) : data.users;
+}
+async function findUserByUsername(username) {
+  const { mode, cfg, data } = await ensureUsersBackend();
+  return mode === "airtable"
+    ? usersStore.findUserByUsername(cfg, username)
+    : data.users.find((u) => u.username.toLowerCase() === String(username).toLowerCase());
+}
+async function findUserByEmail(emailAddr) {
+  if (!emailAddr) return undefined;
+  const { mode, cfg, data } = await ensureUsersBackend();
+  return mode === "airtable"
+    ? usersStore.findUserByEmail(cfg, emailAddr)
+    : data.users.find((u) => (u.email || "").toLowerCase() === String(emailAddr).toLowerCase());
+}
+async function findUserById(id) {
+  const { mode, cfg, data } = await ensureUsersBackend();
+  return mode === "airtable" ? usersStore.findUserById(cfg, id) : data.users.find((u) => u.id === id) || null;
+}
+async function createUser(user) {
+  const { mode, cfg, data } = await ensureUsersBackend();
+  if (mode === "airtable") return usersStore.createUser(cfg, user);
+  const full = { id: crypto.randomUUID(), createdAt: new Date().toISOString(), ...user };
+  data.users.push(full);
+  save(data);
+  return full;
+}
+/** patch : objet de champs a modifier. Une valeur `undefined` signifie
+ * "effacer ce champ" (equivalent du `delete` utilise historiquement sur
+ * l'objet local, ex. verifyToken/verifyTokenExpires apres validation). */
+async function updateUser(id, patch) {
+  const { mode, cfg, data } = await ensureUsersBackend();
+  if (mode === "airtable") return usersStore.updateUser(cfg, id, patch);
+  const u = data.users.find((x) => x.id === id);
+  if (!u) return null;
+  Object.keys(patch).forEach((k) => {
+    if (patch[k] === undefined) delete u[k];
+    else u[k] = patch[k];
+  });
+  save(data);
+  return u;
+}
+async function deleteUser(id) {
+  const { mode, cfg, data } = await ensureUsersBackend();
+  if (mode === "airtable") {
+    await usersStore.deleteUser(cfg, id);
+    return;
+  }
+  data.users = data.users.filter((u) => u.id !== id);
+  save(data);
+}
+
+async function seedAdminIfNeeded() {
+  const users = await listUsers();
+  if (users.length === 0) {
     const bcrypt = require("bcryptjs");
     const tempPassword = crypto.randomBytes(4).toString("hex"); // ex: "a1b2c3d4"
-    data.users.push({
-      id: crypto.randomUUID(),
+    await createUser({
       username: "admin",
       name: "Administrateur",
       role: "admin",
       passwordHash: bcrypt.hashSync(tempPassword, 10),
       mustChangePassword: true,
-      createdAt: new Date().toISOString(),
     });
-    save(data);
     console.log("=".repeat(60));
     console.log("Premier demarrage : compte admin cree.");
     console.log("  Identifiant : admin");
@@ -229,7 +345,6 @@ function seedAdminIfNeeded() {
     console.log("  (Ce mot de passe ne sera plus jamais affiche - change-le des la premiere connexion.)");
     console.log("=".repeat(60));
   }
-  return data;
 }
 
 function addActivity(entry) {
@@ -259,56 +374,15 @@ function addActivity(entry) {
  *   ANTHROPIC_API_KEY, ANTHROPIC_MODEL
  *     -> reconnecte automatiquement les integrations correspondantes.
  */
-function seedFromEnv() {
+async function seedFromEnv() {
   const data = load();
   let changed = false;
   const bcrypt = require("bcryptjs");
 
-  function upsertUser({ username, password, name, role, phone }) {
-    if (!username || !password || !role) return;
-    const hash = bcrypt.hashSync(password, 10);
-    let u = data.users.find((x) => x.username === username);
-    if (!u) {
-      data.users.push({
-        id: crypto.randomUUID(),
-        username,
-        name: name || username,
-        role,
-        phone: phone || "",
-        passwordHash: hash,
-        mustChangePassword: false,
-        createdAt: new Date().toISOString(),
-      });
-      changed = true;
-      console.log(`[env] Compte "${username}" (${role}) recree depuis les variables d'environnement.`);
-    } else if (!bcrypt.compareSync(password, u.passwordHash)) {
-      u.passwordHash = hash;
-      u.mustChangePassword = false;
-      if (name) u.name = name;
-      if (phone) u.phone = phone;
-      changed = true;
-      console.log(`[env] Mot de passe de "${username}" resynchronise depuis les variables d'environnement.`);
-    }
-  }
-
-  if (process.env.ADMIN_PASSWORD) {
-    upsertUser({
-      username: process.env.ADMIN_USERNAME || "admin",
-      password: process.env.ADMIN_PASSWORD,
-      name: process.env.ADMIN_NAME || "Administrateur",
-      role: "admin",
-    });
-  }
-
-  if (process.env.EXTRA_USERS) {
-    try {
-      const extra = JSON.parse(process.env.EXTRA_USERS);
-      if (Array.isArray(extra)) extra.forEach(upsertUser);
-    } catch (e) {
-      console.error("[env] EXTRA_USERS invalide (JSON attendu) :", e.message);
-    }
-  }
-
+  // Connecte Airtable EN PREMIER (avant de creer/mettre a jour des comptes
+  // ci-dessous) : si AIRTABLE_TOKEN/AIRTABLE_BASE_ID sont fournis, on veut
+  // que les comptes admin/EXTRA_USERS soient directement crees dans la table
+  // Airtable persistante, pas dans le fichier local ephemere.
   if (process.env.AIRTABLE_TOKEN && process.env.AIRTABLE_BASE_ID) {
     if (
       data.integrations.airtable.token !== process.env.AIRTABLE_TOKEN ||
@@ -319,8 +393,54 @@ function seedFromEnv() {
         baseId: process.env.AIRTABLE_BASE_ID,
         connected: true,
       };
+      save(data);
       changed = true;
       console.log("[env] Integration Airtable (re)connectee depuis les variables d'environnement.");
+    }
+  }
+
+  async function upsertUser({ username, password, name, role, phone }) {
+    if (!username || !password || !role) return;
+    const hash = bcrypt.hashSync(password, 10);
+    const existing = await findUserByUsername(username);
+    if (!existing) {
+      await createUser({
+        username,
+        name: name || username,
+        role,
+        phone: phone || "",
+        passwordHash: hash,
+        mustChangePassword: false,
+      });
+      console.log(`[env] Compte "${username}" (${role}) recree depuis les variables d'environnement.`);
+    } else if (!bcrypt.compareSync(password, existing.passwordHash)) {
+      await updateUser(existing.id, {
+        passwordHash: hash,
+        mustChangePassword: false,
+        ...(name ? { name } : {}),
+        ...(phone ? { phone } : {}),
+      });
+      console.log(`[env] Mot de passe de "${username}" resynchronise depuis les variables d'environnement.`);
+    }
+  }
+
+  if (process.env.ADMIN_PASSWORD) {
+    await upsertUser({
+      username: process.env.ADMIN_USERNAME || "admin",
+      password: process.env.ADMIN_PASSWORD,
+      name: process.env.ADMIN_NAME || "Administrateur",
+      role: "admin",
+    });
+  }
+
+  if (process.env.EXTRA_USERS) {
+    try {
+      const extra = JSON.parse(process.env.EXTRA_USERS);
+      if (Array.isArray(extra)) {
+        for (const u of extra) await upsertUser(u);
+      }
+    } catch (e) {
+      console.error("[env] EXTRA_USERS invalide (JSON attendu) :", e.message);
     }
   }
 
@@ -372,4 +492,19 @@ function seedFromEnv() {
   return data;
 }
 
-module.exports = { load, save, seedAdminIfNeeded, seedFromEnv, addActivity, DB_FILE, DATA_DIR };
+module.exports = {
+  load,
+  save,
+  seedAdminIfNeeded,
+  seedFromEnv,
+  addActivity,
+  DB_FILE,
+  DATA_DIR,
+  listUsers,
+  findUserByUsername,
+  findUserByEmail,
+  findUserById,
+  createUser,
+  updateUser,
+  deleteUser,
+};

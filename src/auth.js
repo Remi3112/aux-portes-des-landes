@@ -5,9 +5,8 @@ const db = require("./db");
 function hashPassword(pw) { return bcrypt.hashSync(pw, 10); }
 function verifyPassword(pw, hash) { return bcrypt.compareSync(pw, hash || ""); }
 
-function findUser(username) {
-  const data = db.load();
-  return data.users.find((u) => u.username.toLowerCase() === String(username).toLowerCase());
+async function findUser(username) {
+  return db.findUserByUsername(username);
 }
 
 function requireAuth(req, res, next) {

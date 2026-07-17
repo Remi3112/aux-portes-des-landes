@@ -64,6 +64,15 @@ router.post("/integrations/airtable", requireAdmin, async (req, res) => {
     data.integrations.airtable = { token: token.trim(), baseId: baseId.trim(), connected: true };
     db.save(data);
     db.addActivity({ type: "integration_saved", user: req.session.user.username, table: "airtable" });
+    // Connecter Airtable declenche (au premier acces a un compte) la migration
+    // des comptes locaux vers la table Airtable "Utilisateurs appli" (voir
+    // src/db.js) — ce qui change l'identifiant interne de CHAQUE compte, y
+    // compris celui de l'admin en train de faire cette requete. On rafraichit
+    // donc immediatement sa propre session pour ne pas rester connecte avec
+    // un identifiant perime (qui ferait echouer ses actions suivantes, ex.
+    // changer son propre mot de passe ou son propre telephone).
+    const refreshed = await db.findUserByUsername(req.session.user.username);
+    if (refreshed) req.session.user = { ...req.session.user, id: refreshed.id };
     res.json({ ok: true, tableCount: result.tableCount });
   } catch (e) {
     res.status(400).json({ error: "Connexion Airtable impossible : " + e.message });

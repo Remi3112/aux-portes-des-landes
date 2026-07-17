@@ -57,10 +57,10 @@ function teamContact(u) {
   return { id: u.id, name: u.name, role: u.role, phone: u.phone || "" };
 }
 
-router.post("/login", (req, res) => {
+router.post("/login", async (req, res) => {
   const { username, password, role } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: "Identifiant et mot de passe requis." });
-  const user = findUser(username);
+  const user = await findUser(username);
   if (!user || !verifyPassword(password, user.passwordHash)) {
     return res.status(401).json({ error: "Identifiant ou mot de passe incorrect." });
   }
@@ -94,20 +94,18 @@ router.post("/signup", async (req, res) => {
   if (password.length < 6) {
     return res.status(400).json({ error: "Le mot de passe doit contenir au moins 6 caractères." });
   }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailAddr.trim())) {
+  if (!isValidEmailFormat(emailAddr)) {
     return res.status(400).json({ error: "Adresse email invalide." });
   }
-  const data = db.load();
-  if (data.users.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
+  if (await findUser(username)) {
     return res.status(409).json({ error: "Cet identifiant existe déjà." });
   }
-  if (data.users.some((u) => (u.email || "").toLowerCase() === emailAddr.trim().toLowerCase())) {
+  if (await db.findUserByEmail(emailAddr.trim())) {
     return res.status(409).json({ error: "Un compte existe déjà avec cette adresse email." });
   }
 
   const token = crypto.randomBytes(32).toString("hex");
-  const user = {
-    id: crypto.randomUUID(),
+  const userFields = {
     username: username.trim(),
     name: name.trim(),
     role,
@@ -118,16 +116,15 @@ router.post("/signup", async (req, res) => {
     verifyTokenExpires: Date.now() + 24 * 60 * 60 * 1000,
     passwordHash: hashPassword(password),
     mustChangePassword: false,
-    createdAt: new Date().toISOString(),
   };
 
   const baseUrl = `${req.protocol}://${req.get("host")}`;
   const verifyUrl = `${baseUrl}/api/auth/verify-email?token=${token}`;
   try {
     await email.sendMail({
-      to: user.email,
+      to: userFields.email,
       subject: "Confirme ton compte — Aux Portes des Landes",
-      html: verificationEmailHtml(user.name, user.role, verifyUrl),
+      html: verificationEmailHtml(userFields.name, userFields.role, verifyUrl),
     });
   } catch (e) {
     return res.status(502).json({ error: "Impossible d'envoyer l'email de validation : " + e.message });
@@ -135,25 +132,21 @@ router.post("/signup", async (req, res) => {
 
   // On n'enregistre le compte qu'une fois l'email parti avec succes, pour ne
   // jamais laisser un compte fantome impossible a activer si l'envoi echoue.
-  data.users.push(user);
-  db.save(data);
+  const user = await db.createUser(userFields);
   db.addActivity({ type: "signup_pending", user: user.username, table: role });
   res.json({ ok: true, message: "Compte créé. Vérifie ta boîte mail pour l'activer avant de te connecter." });
 });
 
 // Lien clique depuis l'email de validation : active le compte puis redirige
 // vers l'accueil avec un indicateur de resultat (?verified=1|0) lu par le frontend.
-router.get("/verify-email", (req, res) => {
+router.get("/verify-email", async (req, res) => {
   const { token } = req.query || {};
-  const data = db.load();
-  const user = token && data.users.find((u) => u.verifyToken && u.verifyToken === token);
+  const users = token ? await db.listUsers() : [];
+  const user = users.find((u) => u.verifyToken && u.verifyToken === token);
   if (!user || (user.verifyTokenExpires && user.verifyTokenExpires < Date.now())) {
     return res.redirect("/?verified=0");
   }
-  user.emailVerified = true;
-  delete user.verifyToken;
-  delete user.verifyTokenExpires;
-  db.save(data);
+  await db.updateUser(user.id, { emailVerified: true, verifyToken: undefined, verifyTokenExpires: undefined });
   db.addActivity({ type: "signup_verified", user: user.username });
   res.redirect("/?verified=1");
 });
@@ -164,8 +157,7 @@ router.get("/verify-email", (req, res) => {
 router.post("/resend-verification", async (req, res) => {
   const { username } = req.body || {};
   if (!username) return res.status(400).json({ error: "Identifiant requis." });
-  const data = db.load();
-  const user = data.users.find((u) => u.username.toLowerCase() === String(username).toLowerCase());
+  const user = await findUser(username);
   if (!user) return res.status(404).json({ error: "Compte introuvable." });
   if (user.emailVerified !== false) return res.status(400).json({ error: "Ce compte est déjà activé." });
   if (!user.email) return res.status(400).json({ error: "Aucune adresse email associée à ce compte." });
@@ -182,9 +174,7 @@ router.post("/resend-verification", async (req, res) => {
   } catch (e) {
     return res.status(502).json({ error: "Impossible d'envoyer l'email : " + e.message });
   }
-  user.verifyToken = token;
-  user.verifyTokenExpires = Date.now() + 24 * 60 * 60 * 1000;
-  db.save(data);
+  await db.updateUser(user.id, { verifyToken: token, verifyTokenExpires: Date.now() + 24 * 60 * 60 * 1000 });
   res.json({ ok: true });
 });
 
@@ -198,15 +188,12 @@ router.get("/me", (req, res) => {
   res.json({ user: req.session.user });
 });
 
-router.post("/change-password", requireAuth, (req, res) => {
+router.post("/change-password", requireAuth, async (req, res) => {
   const { newPassword } = req.body || {};
   if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: "Le mot de passe doit contenir au moins 6 caractères." });
-  const data = db.load();
-  const u = data.users.find((x) => x.id === req.session.user.id);
+  const u = await db.findUserById(req.session.user.id);
   if (!u) return res.status(404).json({ error: "Utilisateur introuvable." });
-  u.passwordHash = hashPassword(newPassword);
-  u.mustChangePassword = false;
-  db.save(data);
+  await db.updateUser(u.id, { passwordHash: hashPassword(newPassword), mustChangePassword: false });
   req.session.user.mustChangePassword = false;
   res.json({ ok: true });
 });
@@ -220,23 +207,22 @@ function requireTeamAccess(req, res, next) {
   }
   next();
 }
-router.get("/team-contacts", requireAuth, requireTeamAccess, (req, res) => {
-  const data = db.load();
-  res.json({ contacts: data.users.map(teamContact) });
+router.get("/team-contacts", requireAuth, requireTeamAccess, async (req, res) => {
+  const users = await db.listUsers();
+  res.json({ contacts: users.map(teamContact) });
 });
 
 // ---- Gestion des utilisateurs (admin uniquement) ----
-router.get("/users", requireAdmin, (req, res) => {
-  const data = db.load();
-  res.json({ users: data.users.map(publicUser) });
+router.get("/users", requireAdmin, async (req, res) => {
+  const users = await db.listUsers();
+  res.json({ users: users.map(publicUser) });
 });
 
-router.post("/users", requireAdmin, (req, res) => {
+router.post("/users", requireAdmin, async (req, res) => {
   const { username, password, name, role, phone, email: emailAddr, litigeFormUrl } = req.body || {};
   if (!username || !password || !name || !role) return res.status(400).json({ error: "Tous les champs sont requis." });
   if (!["admin", "collaborateur", "prestataire"].includes(role)) return res.status(400).json({ error: "Profil invalide." });
-  const data = db.load();
-  if (data.users.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
+  if (await findUser(username)) {
     return res.status(409).json({ error: "Cet identifiant existe déjà." });
   }
   // Email facultatif a la creation manuelle par un admin (pas de validation
@@ -245,7 +231,7 @@ router.post("/users", requireAdmin, (req, res) => {
   const cleanEmail = (emailAddr || "").trim();
   if (cleanEmail) {
     if (!isValidEmailFormat(cleanEmail)) return res.status(400).json({ error: "Adresse email invalide." });
-    if (data.users.some((u) => (u.email || "").toLowerCase() === cleanEmail.toLowerCase())) {
+    if (await db.findUserByEmail(cleanEmail)) {
       return res.status(409).json({ error: "Un compte existe déjà avec cette adresse email." });
     }
   }
@@ -257,8 +243,7 @@ router.post("/users", requireAdmin, (req, res) => {
   if (cleanLitigeUrl && !isValidHttpUrl(cleanLitigeUrl)) {
     return res.status(400).json({ error: "Le lien du formulaire de litige doit commencer par http:// ou https://" });
   }
-  const user = {
-    id: crypto.randomUUID(),
+  const user = await db.createUser({
     username: username.trim(),
     name: name.trim(),
     role,
@@ -267,10 +252,7 @@ router.post("/users", requireAdmin, (req, res) => {
     litigeFormUrl: cleanLitigeUrl,
     passwordHash: hashPassword(password),
     mustChangePassword: true,
-    createdAt: new Date().toISOString(),
-  };
-  data.users.push(user);
-  db.save(data);
+  });
   db.addActivity({ type: "user_created", user: req.session.user.username, table: username });
   res.json({ user: publicUser(user) });
 });
@@ -278,25 +260,26 @@ router.post("/users", requireAdmin, (req, res) => {
 // Edition legere d'un compte existant (nom + telephone uniquement — le mot de
 // passe se change via /change-password, l'identifiant et le profil restent
 // fixes une fois le compte cree pour eviter toute confusion de session).
-router.patch("/users/:id", requireAdmin, (req, res) => {
+router.patch("/users/:id", requireAdmin, async (req, res) => {
   const { name, phone, emailVerified, email: emailAddr, litigeFormUrl } = req.body || {};
-  const data = db.load();
-  const u = data.users.find((x) => x.id === req.params.id);
+  const u = await db.findUserById(req.params.id);
   if (!u) return res.status(404).json({ error: "Utilisateur introuvable." });
+  const patch = {};
   if (name !== undefined) {
     if (!name.trim()) return res.status(400).json({ error: "Le nom ne peut pas être vide." });
-    u.name = name.trim();
+    patch.name = name.trim();
   }
-  if (phone !== undefined) u.phone = phone.trim();
+  if (phone !== undefined) patch.phone = phone.trim();
   if (emailAddr !== undefined) {
     const cleanEmail = (emailAddr || "").trim();
     if (cleanEmail) {
       if (!isValidEmailFormat(cleanEmail)) return res.status(400).json({ error: "Adresse email invalide." });
-      if (data.users.some((x) => x.id !== u.id && (x.email || "").toLowerCase() === cleanEmail.toLowerCase())) {
+      const conflict = await db.findUserByEmail(cleanEmail);
+      if (conflict && conflict.id !== u.id) {
         return res.status(409).json({ error: "Un compte existe déjà avec cette adresse email." });
       }
     }
-    u.email = cleanEmail;
+    patch.email = cleanEmail;
   }
   // Lien de formulaire Airtable individuel (declaration de litige) — voir
   // POST /users plus haut pour le detail. Modifiable a tout moment par un
@@ -306,34 +289,32 @@ router.patch("/users/:id", requireAdmin, (req, res) => {
     if (cleanLitigeUrl && !isValidHttpUrl(cleanLitigeUrl)) {
       return res.status(400).json({ error: "Le lien du formulaire de litige doit commencer par http:// ou https://" });
     }
-    u.litigeFormUrl = cleanLitigeUrl;
+    patch.litigeFormUrl = cleanLitigeUrl;
   }
   // Filet de securite : permet a un admin d'activer manuellement un compte
   // inscrit via /signup si l'email de validation est perdu, expire, ou si
   // l'envoi d'email n'est pas (encore) configure.
   if (emailVerified === true && u.emailVerified === false) {
-    u.emailVerified = true;
-    delete u.verifyToken;
-    delete u.verifyTokenExpires;
+    patch.emailVerified = true;
+    patch.verifyToken = undefined;
+    patch.verifyTokenExpires = undefined;
     db.addActivity({ type: "signup_verified_by_admin", user: req.session.user.username, table: u.username });
   }
-  db.save(data);
+  const updated = await db.updateUser(u.id, patch);
   if (req.session.user.id === u.id) {
-    req.session.user.name = u.name;
-    req.session.user.phone = u.phone;
-    req.session.user.email = u.email;
-    req.session.user.litigeFormUrl = u.litigeFormUrl;
+    req.session.user.name = updated.name;
+    req.session.user.phone = updated.phone;
+    req.session.user.email = updated.email;
+    req.session.user.litigeFormUrl = updated.litigeFormUrl;
   }
-  res.json({ user: publicUser(u) });
+  res.json({ user: publicUser(updated) });
 });
 
-router.delete("/users/:id", requireAdmin, (req, res) => {
-  const data = db.load();
-  const target = data.users.find((u) => u.id === req.params.id);
+router.delete("/users/:id", requireAdmin, async (req, res) => {
+  const target = await db.findUserById(req.params.id);
   if (!target) return res.status(404).json({ error: "Utilisateur introuvable." });
   if (target.username === "admin") return res.status(400).json({ error: "Impossible de supprimer le compte admin principal." });
-  data.users = data.users.filter((u) => u.id !== req.params.id);
-  db.save(data);
+  await db.deleteUser(req.params.id);
   db.addActivity({ type: "user_deleted", user: req.session.user.username, table: target.username });
   res.json({ ok: true });
 });

@@ -18,16 +18,16 @@ async function main() {
   console.log("Aux Portes des Landes — Reinitialisation d'un mot de passe");
   console.log("=".repeat(64));
 
-  const data = db.load();
-  if (!data.users.length) {
-    console.log("\nAucun compte n'existe encore dans data/db.json.");
+  const users = await db.listUsers();
+  if (!users.length) {
+    console.log("\nAucun compte n'existe encore.");
     console.log("Lance simplement start.bat (ou start.sh) : un compte admin sera cree");
     console.log("automatiquement au premier demarrage, avec un mot de passe temporaire affiche une seule fois.");
     return;
   }
 
   console.log("\nComptes existants :");
-  data.users.forEach((u) => console.log(`  - ${u.username}  (${u.role})`));
+  users.forEach((u) => console.log(`  - ${u.username}  (${u.role})`));
   console.log("");
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -43,7 +43,7 @@ async function main() {
 
   try {
     const username = await ask("Identifiant du compte a reinitialiser : ");
-    const user = data.users.find((u) => u.username.toLowerCase() === username.toLowerCase());
+    const user = users.find((u) => u.username.toLowerCase() === username.toLowerCase());
     if (!user) {
       console.log(`\nAucun compte "${username}" trouve. Verifie l'orthographe (voir la liste ci-dessus) et relance le script.`);
       return;
@@ -59,14 +59,12 @@ async function main() {
       return;
     }
 
-    user.passwordHash = hashPassword(pass1);
-    user.mustChangePassword = false;
-    db.save(data);
+    await db.updateUser(user.id, { passwordHash: hashPassword(pass1), mustChangePassword: false });
 
     console.log(`\n✅ Mot de passe mis a jour pour le compte "${user.username}".`);
     console.log("Tu peux maintenant te connecter avec ce nouveau mot de passe dans l'application.");
-    console.log("Il est stocke (hache, jamais en clair) dans data/db.json sur ce poste, et sera conserve");
-    console.log("automatiquement lors des prochaines mises a jour (update.bat / update.sh).");
+    console.log("Si Airtable est connecte, il est stocke dans la table \"Utilisateurs appli\" (persistant, jamais perdu");
+    console.log("lors d'une mise a jour) ; sinon dans data/db.json sur ce poste.");
   } finally {
     rl.close();
   }
