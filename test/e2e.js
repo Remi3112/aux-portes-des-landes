@@ -266,12 +266,30 @@ async function run() {
   console.log("\n== TEST 4: Creation des comptes collaborateur et prestataire ==");
   r = await call("POST", "/api/auth/users", { username: "collab", password: "Collab123!", name: "Camille Collab", role: "collaborateur" }, adminCookie);
   ok(r.status === 200 && r.json.user.role === "collaborateur", "compte collaborateur cree");
-  r = await call("POST", "/api/auth/users", { username: "oihana", password: "Oihana123!", name: "Oihana", role: "prestataire" }, adminCookie);
+  r = await call("POST", "/api/auth/users", {
+    username: "oihana", password: "Oihana123!", name: "Oihana", role: "prestataire",
+    email: "oihana@example.com", litigeFormUrl: "https://airtable.com/appTEST/shrOIHANA",
+  }, adminCookie);
   ok(r.status === 200 && r.json.user.role === "prestataire", "compte prestataire cree (prenom = 'Oihana', identique a Airtable)");
+  ok(r.json.user.email === "oihana@example.com", "l'email fourni a la creation est bien enregistre");
+  ok(r.json.user.litigeFormUrl === "https://airtable.com/appTEST/shrOIHANA", "le lien de formulaire de litige individuel est bien enregistre");
+  const oihanaId = r.json.user.id;
   r = await call("POST", "/api/auth/users", { username: "collab", password: "x", name: "Doublon", role: "collaborateur" }, adminCookie);
   ok(r.status === 409, "impossible de creer deux comptes avec le meme identifiant");
   r = await call("POST", "/api/auth/users", { username: "hacker", password: "x", name: "X", role: "collaborateur" }, null);
   ok(r.status === 403, "un utilisateur non connecte ne peut pas creer de compte");
+  r = await call("POST", "/api/auth/users", { username: "bademail", password: "x", name: "X", role: "collaborateur", email: "pas-un-email" }, adminCookie);
+  ok(r.status === 400, "un email invalide est rejete a la creation d'un compte");
+  r = await call("POST", "/api/auth/users", { username: "emaildup", password: "x", name: "X", role: "collaborateur", email: "oihana@example.com" }, adminCookie);
+  ok(r.status === 409, "impossible de creer deux comptes avec le meme email");
+  r = await call("POST", "/api/auth/users", { username: "badlitigeurl", password: "x", name: "X", role: "prestataire", litigeFormUrl: "pas-une-url" }, adminCookie);
+  ok(r.status === 400, "un lien de formulaire de litige invalide (pas http/https) est rejete a la creation");
+  r = await call("PATCH", `/api/auth/users/${oihanaId}`, { litigeFormUrl: "https://airtable.com/appTEST/shrOIHANA-V2" }, adminCookie);
+  ok(r.status === 200 && r.json.user.litigeFormUrl === "https://airtable.com/appTEST/shrOIHANA-V2", "un admin peut modifier le lien de formulaire de litige d'un prestataire existant");
+  r = await call("POST", "/api/auth/users", { username: "collab2", password: "x", name: "Collab Deux", role: "collaborateur", email: "collab2@example.com" }, adminCookie);
+  ok(r.status === 200, "compte collab2 cree avec un email distinct (pour tester le conflit ci-dessous)");
+  r = await call("PATCH", `/api/auth/users/${oihanaId}`, { email: "collab2@example.com" }, adminCookie);
+  ok(r.status === 409, "impossible de modifier l'email d'un compte pour prendre celui d'un autre compte");
 
   console.log("\n== TEST 5: Connexion collaborateur et prestataire ==");
   r = await call("POST", "/api/auth/login", { username: "collab", password: "Collab123!", role: "collaborateur" });
@@ -280,6 +298,10 @@ async function run() {
   r = await call("POST", "/api/auth/login", { username: "oihana", password: "Oihana123!", role: "prestataire" });
   ok(r.status === 200, "connexion prestataire reussie");
   let prestaCookie = r.cookie;
+  r = await call("GET", "/api/auth/me", null, prestaCookie);
+  ok(r.status === 200 && r.json.user.litigeFormUrl === "https://airtable.com/appTEST/shrOIHANA-V2", "le prestataire voit bien SON PROPRE lien de formulaire de litige via /me");
+  r = await call("GET", "/api/auth/me", null, collabCookie);
+  ok(r.status === 200 && r.json.user.litigeFormUrl === "", "un collaborateur (sans lien de litige associe) n'a pas de litigeFormUrl");
   r = await call("POST", "/api/auth/login", { username: "oihana", password: "MauvaisMdp", role: "prestataire" });
   ok(r.status === 401, "mauvais mot de passe refuse");
   r = await call("POST", "/api/auth/login", { username: "collab", password: "Collab123!", role: "admin" });

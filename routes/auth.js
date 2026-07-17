@@ -19,7 +19,19 @@ function publicUser(u) {
     // => considere verifie de longue date, pour ne jamais bloquer une installation existante.
     emailVerified: u.emailVerified !== false,
     mustChangePassword: !!u.mustChangePassword,
+    // Lien de formulaire Airtable individuel (prestataire menage uniquement)
+    // pour declarer un litige — chaque prestataire ne voit QUE son propre
+    // lien, jamais celui des autres (voir /api/auth/me et la section
+    // "Declarer un litige" cote frontend).
+    litigeFormUrl: u.litigeFormUrl || "",
   };
+}
+
+function isValidEmailFormat(e) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim());
+}
+function isValidHttpUrl(u) {
+  return /^https?:\/\//i.test(String(u || "").trim());
 }
 
 function escapeHtml(s) {
@@ -220,12 +232,30 @@ router.get("/users", requireAdmin, (req, res) => {
 });
 
 router.post("/users", requireAdmin, (req, res) => {
-  const { username, password, name, role, phone } = req.body || {};
+  const { username, password, name, role, phone, email: emailAddr, litigeFormUrl } = req.body || {};
   if (!username || !password || !name || !role) return res.status(400).json({ error: "Tous les champs sont requis." });
   if (!["admin", "collaborateur", "prestataire"].includes(role)) return res.status(400).json({ error: "Profil invalide." });
   const data = db.load();
   if (data.users.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
     return res.status(409).json({ error: "Cet identifiant existe déjà." });
+  }
+  // Email facultatif a la creation manuelle par un admin (pas de validation
+  // par lien ici, contrairement a /signup) — mais s'il est fourni, il doit
+  // avoir un format valide et etre unique.
+  const cleanEmail = (emailAddr || "").trim();
+  if (cleanEmail) {
+    if (!isValidEmailFormat(cleanEmail)) return res.status(400).json({ error: "Adresse email invalide." });
+    if (data.users.some((u) => (u.email || "").toLowerCase() === cleanEmail.toLowerCase())) {
+      return res.status(409).json({ error: "Un compte existe déjà avec cette adresse email." });
+    }
+  }
+  // Lien de formulaire Airtable individuel (declaration de litige) : propre a
+  // chaque prestataire, saisi librement par l'admin (n'importe quelle URL
+  // http(s)), pertinent surtout pour le profil "prestataire" mais pas
+  // restreint techniquement aux autres profils.
+  const cleanLitigeUrl = (litigeFormUrl || "").trim();
+  if (cleanLitigeUrl && !isValidHttpUrl(cleanLitigeUrl)) {
+    return res.status(400).json({ error: "Le lien du formulaire de litige doit commencer par http:// ou https://" });
   }
   const user = {
     id: crypto.randomUUID(),
@@ -233,6 +263,8 @@ router.post("/users", requireAdmin, (req, res) => {
     name: name.trim(),
     role,
     phone: (phone || "").trim(),
+    email: cleanEmail,
+    litigeFormUrl: cleanLitigeUrl,
     passwordHash: hashPassword(password),
     mustChangePassword: true,
     createdAt: new Date().toISOString(),
@@ -247,7 +279,7 @@ router.post("/users", requireAdmin, (req, res) => {
 // passe se change via /change-password, l'identifiant et le profil restent
 // fixes une fois le compte cree pour eviter toute confusion de session).
 router.patch("/users/:id", requireAdmin, (req, res) => {
-  const { name, phone, emailVerified } = req.body || {};
+  const { name, phone, emailVerified, email: emailAddr, litigeFormUrl } = req.body || {};
   const data = db.load();
   const u = data.users.find((x) => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: "Utilisateur introuvable." });
@@ -256,6 +288,26 @@ router.patch("/users/:id", requireAdmin, (req, res) => {
     u.name = name.trim();
   }
   if (phone !== undefined) u.phone = phone.trim();
+  if (emailAddr !== undefined) {
+    const cleanEmail = (emailAddr || "").trim();
+    if (cleanEmail) {
+      if (!isValidEmailFormat(cleanEmail)) return res.status(400).json({ error: "Adresse email invalide." });
+      if (data.users.some((x) => x.id !== u.id && (x.email || "").toLowerCase() === cleanEmail.toLowerCase())) {
+        return res.status(409).json({ error: "Un compte existe déjà avec cette adresse email." });
+      }
+    }
+    u.email = cleanEmail;
+  }
+  // Lien de formulaire Airtable individuel (declaration de litige) — voir
+  // POST /users plus haut pour le detail. Modifiable a tout moment par un
+  // admin, ex. pour associer/mettre a jour le lien d'un prestataire menage.
+  if (litigeFormUrl !== undefined) {
+    const cleanLitigeUrl = (litigeFormUrl || "").trim();
+    if (cleanLitigeUrl && !isValidHttpUrl(cleanLitigeUrl)) {
+      return res.status(400).json({ error: "Le lien du formulaire de litige doit commencer par http:// ou https://" });
+    }
+    u.litigeFormUrl = cleanLitigeUrl;
+  }
   // Filet de securite : permet a un admin d'activer manuellement un compte
   // inscrit via /signup si l'email de validation est perdu, expire, ou si
   // l'envoi d'email n'est pas (encore) configure.
@@ -266,7 +318,12 @@ router.patch("/users/:id", requireAdmin, (req, res) => {
     db.addActivity({ type: "signup_verified_by_admin", user: req.session.user.username, table: u.username });
   }
   db.save(data);
-  if (req.session.user.id === u.id) { req.session.user.name = u.name; req.session.user.phone = u.phone; }
+  if (req.session.user.id === u.id) {
+    req.session.user.name = u.name;
+    req.session.user.phone = u.phone;
+    req.session.user.email = u.email;
+    req.session.user.litigeFormUrl = u.litigeFormUrl;
+  }
   res.json({ user: publicUser(u) });
 });
 
