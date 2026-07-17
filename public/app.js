@@ -689,7 +689,20 @@ async function openDetailModal(key, rec, linkedLabels){
     const linkedEditable = type==="multipleRecordLinks" && isLinkedEditable(tbl, fid);
     const isEditable = canWrite && (!READONLY_TYPES.has(type) || linkedEditable) && !(CURRENT_USER.role==="prestataire" && !(tbl.prestataireEditable||[]).includes(fid));
     const full = ["multilineText","richText","multipleRecordLinks"].includes(type) ? "full":"";
-    bodyHtml += `<div class="field ${full}"><label>${esc(name)}${sensitiveTag}</label>${isEditable ? renderInput(fid, type, val) : `<div class="roField">${displayValue(type,val,linkedLabels[fid]) || '<span class="muted">—</span>'}</div>`}</div>`;
+    let fieldControl;
+    if(isEditable){
+      fieldControl = renderInput(fid, type, val);
+      // Champ "url" modifiable (ex: Lien reponse Airbnb) : on garde le champ
+      // texte editable, mais on ajoute a cote un vrai bouton cliquable qui
+      // ouvre le lien dans un nouvel onglet, plutot que de forcer un
+      // copier-coller manuel de l'URL.
+      if(type==="url" && val){
+        fieldControl = `<div style="display:flex;gap:8px;align-items:center;">${fieldControl}${linkButtonHtml(val)}</div>`;
+      }
+    } else {
+      fieldControl = `<div class="roField">${displayValue(type,val,linkedLabels[fid]) || '<span class="muted">—</span>'}</div>`;
+    }
+    bodyHtml += `<div class="field ${full}"><label>${esc(name)}${sensitiveTag}</label>${fieldControl}</div>`;
   }
   bodyHtml += `</div>`;
   overlay.innerHTML = `<div class="modal">
