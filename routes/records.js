@@ -1,6 +1,6 @@
 "use strict";
 const express = require("express");
-const { TABLES, READONLY_TYPES, SLACK_NOTIFY_TABLES, LINKED_FIELDS, can, fieldsIdToName, labelForRecord } = require("../src/tables");
+const { TABLES, READONLY_TYPES, SLACK_NOTIFY_TABLES, LINKED_FIELDS, can, fieldsIdToName, labelForRecord, augmentTablesWithSchema } = require("../src/tables");
 const { requireAuth } = require("../src/auth");
 const airtable = require("../src/airtable");
 const slack = require("../src/slack");
@@ -90,12 +90,27 @@ router.get("/:tableKey/linked/:fieldId", requireAuth, async (req, res) => {
   }
 });
 
-let schemaCache = { at: 0, data: null };
 async function getCachedSchema() {
-  if (schemaCache.data && Date.now() - schemaCache.at < 60_000) return schemaCache.data;
-  const data = await airtable.getBaseSchema();
-  schemaCache = { at: Date.now(), data };
-  return data;
+  return airtable.getCachedBaseSchema();
+}
+
+/**
+ * Version de la config d'une table completee avec les champs Airtable
+ * decouverts dynamiquement (voir augmentTablesWithSchema dans src/tables.js).
+ * Utilisee a la creation/modification d'enregistrements pour que les champs
+ * ajoutes directement dans Airtable (sans modification du code) puissent
+ * eux aussi etre ecrits, pas seulement lus. Si Airtable est injoignable, on
+ * retombe simplement sur la config statique (jamais bloquant).
+ */
+async function getAugmentedTable(tableKey) {
+  const tbl = TABLES[tableKey];
+  if (!tbl) return tbl;
+  try {
+    const schema = await getCachedSchema();
+    return augmentTablesWithSchema(schema)[tableKey] || tbl;
+  } catch (e) {
+    return tbl;
+  }
 }
 
 function filterWritableFields(tbl, user, fields) {
@@ -118,8 +133,9 @@ router.post("/:tableKey", requireAuth, async (req, res) => {
   if (!tbl) return res.status(404).json({ error: "Table inconnue." });
   if (!can(req.session.user.role, tableKey, "create")) return res.status(403).json({ error: "Création non autorisée pour ton profil." });
   try {
-    const fieldsById = filterWritableFields(tbl, req.session.user, req.body.fields);
-    const fieldsByName = fieldsIdToName(tbl, fieldsById);
+    const augTbl = await getAugmentedTable(tableKey);
+    const fieldsById = filterWritableFields(augTbl, req.session.user, req.body.fields);
+    const fieldsByName = fieldsIdToName(augTbl, fieldsById);
     const result = await airtable.createRecords(tbl.tableId, [{ fields: fieldsByName }]);
     db.addActivity({ type: "create", user: req.session.user.username, table: tableKey });
     if (SLACK_NOTIFY_TABLES.includes(tableKey)) {
@@ -138,8 +154,9 @@ router.patch("/:tableKey/:recordId", requireAuth, async (req, res) => {
   if (!tbl) return res.status(404).json({ error: "Table inconnue." });
   if (!can(req.session.user.role, tableKey, "update")) return res.status(403).json({ error: "Modification non autorisée pour ton profil." });
   try {
-    const fieldsById = filterWritableFields(tbl, req.session.user, req.body.fields);
-    const fieldsByName = fieldsIdToName(tbl, fieldsById);
+    const augTbl = await getAugmentedTable(tableKey);
+    const fieldsById = filterWritableFields(augTbl, req.session.user, req.body.fields);
+    const fieldsByName = fieldsIdToName(augTbl, fieldsById);
     const result = await airtable.updateRecords(tbl.tableId, [{ id: recordId, fields: fieldsByName }]);
     db.addActivity({ type: "update", user: req.session.user.username, table: tableKey, recordId });
     res.json({ record: result.records ? result.records[0] : result });

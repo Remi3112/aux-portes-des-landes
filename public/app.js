@@ -712,8 +712,20 @@ async function openDetailModal(key, rec, linkedLabels){
     if((tbl.sensitive||[]).includes(fid) && CURRENT_USER.role==="prestataire") return false;
     return true;
   });
+  // Sections optionnelles (voir src/tables.js, ex: Checklist nouvelle annonce) :
+  // un titre + une explication inseres juste avant le champ indique, pour
+  // dire concretement ce que recouvre chaque etape du formulaire.
+  const sectionByField = {};
+  (tbl.sections||[]).forEach(s=>{ sectionByField[s.before] = s; });
   let bodyHtml = `<div class="modalGrid">`;
   for(const fid of fieldsToShow){
+    const section = sectionByField[fid];
+    if(section){
+      bodyHtml += `<div class="field full" style="grid-column:1/-1;margin-top:${fieldsToShow[0]===fid?'0':'10px'};padding-top:${fieldsToShow[0]===fid?'0':'10px'};border-top:${fieldsToShow[0]===fid?'none':'1px solid var(--border,#e5e5e5)'};">
+        <div style="font-weight:600;font-size:14px;">${esc(section.title)}</div>
+        <div class="muted" style="font-size:12.5px;margin-top:2px;">${esc(section.desc)}</div>
+      </div>`;
+    }
     const type = fieldType(tbl, fid);
     const name = fieldName(tbl, fid);
     const val = rec ? rec.fields[fid] : undefined;

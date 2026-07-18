@@ -95,16 +95,33 @@ const mockSchemaChoices = {
   ],
 };
 
+// Simule un champ ajoute directement dans Airtable APRES coup (sans
+// modification du code de l'application) : le schema Meta Airtable le
+// contient, mais src/tables.js ne le decrit pas encore. Sert a verifier
+// augmentTablesWithSchema() (voir TEST 7b).
+const EXTRA_SCHEMA_FIELDS = {
+  [TABLES.proprietaires.tableId]: [
+    { id: "fldExtraTest0001", name: "Nouveau champ ajoute dans Airtable", type: "singleLineText" },
+  ],
+};
+
 function findTableById(tableId) {
   return Object.values(TABLES).find((t) => t.tableId === tableId);
 }
 function nameKeyedToIdKeyed(tableId, fieldsByName) {
   const tbl = findTableById(tableId);
   const out = {};
-  if (!tbl) return fieldsByName;
+  // Inclut aussi les champs "ajoutes directement dans Airtable" (voir
+  // EXTRA_SCHEMA_FIELDS / TEST 7b) : le vrai serveur les resout via le schema
+  // Meta Airtable (augmentTablesWithSchema), donc le mock doit lui aussi
+  // savoir retrouver leur ID a partir de leur nom pour simuler fidelement
+  // l'ecriture cote Airtable.
+  const extra = EXTRA_SCHEMA_FIELDS[tableId] || [];
   Object.entries(fieldsByName || {}).forEach(([name, val]) => {
-    const f = tbl.fields.find((f) => f.n === name);
-    out[f ? f.i : name] = val;
+    const known = tbl && tbl.fields.find((f) => f.n === name);
+    const extraField = !known && extra.find((f) => f.name === name);
+    const fid = known ? known.i : extraField ? extraField.id : name;
+    out[fid] = val;
   });
   return out;
 }
@@ -150,7 +167,7 @@ globalThis.fetch = async function (url, options = {}) {
         name: f.n,
         type: f.t,
         options: mockSchemaChoices[f.i] ? { choices: mockSchemaChoices[f.i] } : undefined,
-      })),
+      })).concat(EXTRA_SCHEMA_FIELDS[t.tableId] || []),
     })).concat(mockDynamicTables);
     return jsonResponse(200, { tables });
   }
@@ -370,6 +387,20 @@ async function run() {
   ok(r.status === 200 && r.json.airtable.connected && r.json.slack.connected && r.json.ai.connected, "les 3 integrations apparaissent connectees");
   ok(Array.isArray(r.json.slack.channels) && r.json.slack.channels.length === 2, "les 2 canaux Slack configures sont bien renvoyes");
   ok(!r.json.airtable.tokenPreview.includes("patTEST123"), "le jeton Airtable complet n'est jamais renvoye au frontend");
+
+  console.log("\n== TEST 7b: Auto-decouverte d'un champ ajoute directement dans Airtable (Proprietaires) ==");
+  r = await call("GET", "/api/config", null, adminCookie);
+  const propCfg = r.json.tables.proprietaires;
+  ok(propCfg.fields.some((f) => f.i === "fldExtraTest0001"), "le champ ajoute dans Airtable (hors code) apparait dans la config des Proprietaires");
+  ok(propCfg.detailFields.includes("fldExtraTest0001"), "ce champ est bien inclus dans le formulaire (detailFields)");
+  r = await call("POST", "/api/records/proprietaires", { fields: { fldguMlPi1cbRVNDL: "TEST Proprietaire schema-sync" } }, adminCookie);
+  ok(r.status === 200, "creation d'un proprietaire de test reussie");
+  const propRecId = r.json.record.id;
+  r = await call("PATCH", `/api/records/proprietaires/${propRecId}`, { fields: { fldExtraTest0001: "valeur test synchronisee" } }, adminCookie);
+  ok(r.status === 200, "l'ecriture sur le champ auto-decouvert reussit (pas seulement la lecture)");
+  r = await call("GET", "/api/records/proprietaires", null, adminCookie);
+  const propRec = r.json.records.find((x) => x.id === propRecId);
+  ok(propRec && propRec.fields.fldExtraTest0001 === "valeur test synchronisee", "la valeur ecrite sur le champ auto-decouvert est bien synchronisee avec Airtable");
 
   console.log("\n== TEST 8: Lecture des enregistrements Airtable avec scoping par role ==");
   r = await call("GET", "/api/records/logements", null, adminCookie);

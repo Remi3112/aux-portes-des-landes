@@ -94,6 +94,19 @@ async function getBaseSchema() {
   return json.tables || [];
 }
 
+// Cache court (60s) du schema complet de la base, partage par tous les
+// appelants (routes/config.js pour completer les formulaires avec les champs
+// ajoutes directement dans Airtable, routes/records.js pour les listes de
+// choix et l'ecriture de ces memes champs). Evite de re-interroger l'API Meta
+// Airtable a chaque requete.
+let baseSchemaCache = { at: 0, data: null };
+async function getCachedBaseSchema() {
+  if (baseSchemaCache.data && Date.now() - baseSchemaCache.at < 60_000) return baseSchemaCache.data;
+  const data = await getBaseSchema();
+  baseSchemaCache = { at: Date.now(), data };
+  return data;
+}
+
 /** Teste la connexion (utilisé par Paramètres > Intégrations > Tester). */
 async function testConnection(token, baseId) {
   const url = `https://api.airtable.com/v0/meta/bases/${baseId}/tables`;
@@ -106,4 +119,4 @@ async function testConnection(token, baseId) {
   return { ok: true, tableCount: (json.tables || []).length };
 }
 
-module.exports = { listRecords, createRecords, updateRecords, deleteRecords, getBaseSchema, testConnection, getConfig };
+module.exports = { listRecords, createRecords, updateRecords, deleteRecords, getBaseSchema, getCachedBaseSchema, testConnection, getConfig };

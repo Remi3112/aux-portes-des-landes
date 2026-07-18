@@ -332,6 +332,16 @@ const TABLES = {
       T("fldKoAdtdMlbhoVkH", "Infos pratiques + frais sur Jana", "checkbox"),
       T("fld0IWm5kUhWIF66C", "Annonce terminée", "checkbox"),
     ],
+    // Repere visuellement, dans le formulaire, ce que recouvre chaque etape
+    // du processus de mise en ligne d'une nouvelle annonce (voir openDetailModal
+    // dans public/app.js, qui insere ce titre + cette explication juste avant
+    // le premier champ liste ici).
+    sections: [
+      { before: "fldUlbtq5SBwKKJbG", title: "Étape 1 — Informations du logement", desc: "Réunir les infos de base indispensables avant toute mise en ligne : description de l'annonce, couchages selon les chambres, capacité voyageurs et équipements." },
+      { before: "fldqfOAZ8ZwkYlLDX", title: "Étape 2 — Prise de contact & contrat", desc: "Connexion aux plateformes (channel manager / OTA), prise de contact avec le prospect, envoi puis réception des informations du contrat." },
+      { before: "fldEZ8z4smNreUomp", title: "Étape 3 — Création des annonces & comptes", desc: "Signature du contrat, création des comptes et des annonces Airbnb/Booking, ajout des accès et des coordonnées bancaires du propriétaire." },
+      { before: "fldNNCicuwDxb45Nx", title: "Mise en ligne technique", desc: "Dernière ligne droite : connexions Stripe, Beds24, Pricelabs et Jana pour finaliser techniquement l'annonce avant qu'elle soit marquée terminée." },
+    ],
     listCols: ["fldUlbtq5SBwKKJbG", "fldQqYqjVcgDBHckr", "fldN8UfI2GqiEmxon", "fldMdRdNYmR7n79Du", "fldUsnThezRsZcJlI", "fldtD6DXb1iLnim7r", "fld0IWm5kUhWIF66C"],
     detailFields: ["fldUlbtq5SBwKKJbG", "fldtc2y2ocMuqdSzf", "fldQqYqjVcgDBHckr", "fldN8UfI2GqiEmxon", "fldtUWm9HmzEAuic0", "fldcdHIkvjLp4kAUF", "fldchNSeH1H1QM9of", "fldCNd7iwQkYLDx6J", "fldMdRdNYmR7n79Du", "fldqfOAZ8ZwkYlLDX", "fldbNd1CMNVgYjVO9", "fldQTZtLmLCqA1OAx", "fldbzfv3YexAbaeQ4", "fldUsnThezRsZcJlI", "fldEZ8z4smNreUomp", "fldreZLvL9piLa9rY", "fldgZmFa3sbwXYdKw", "fldxA9HvQls1yyUO1", "fld1WfWQnRXoTH6iP", "fldMxlPc1p60kqyk7", "fldztxMsfM02mpKfv", "fld6D4dlRerIwCYMK", "fldGVUM6cJ3YfpONp", "fldtD6DXb1iLnim7r", "fldNNCicuwDxb45Nx", "fldHtMI2oOPNOL3X4", "fldzwn8TixVgugfzb", "fld30REFCyWs6du9b", "fld4SQvnsPXqIYxA2", "fldFVqh5QxTiVeHm0", "fldajq9AwiBUzBRhA", "fld00up1IUn4CZHdQ", "fldKoAdtdMlbhoVkH", "fld0IWm5kUhWIF66C"],
     sensitive: [],
@@ -460,6 +470,45 @@ function labelForRecord(tbl, fieldsById) {
   return parts.join(" \u2014 ");
 }
 
+/**
+ * Complète la configuration statique de chaque table avec les champs qui
+ * existent réellement dans Airtable mais qui ne sont pas (encore) décrits
+ * ci-dessus (ex : champ ajouté directement dans Airtable après coup, sans
+ * modification du code de l'application).
+ *
+ * Sans ça, un tel champ resterait invisible dans les formulaires même si
+ * l'API Airtable le renvoie déjà (voir routes/records.js, qui transmet au
+ * frontend les `fields` d'un enregistrement sans filtrage) : le formulaire
+ * ne sait simplement pas qu'il doit l'afficher.
+ *
+ * `schemaTables` vient de src/airtable.js -> getCachedBaseSchema() (API Meta
+ * Airtable). Idempotent et sans effet si `schemaTables` est vide/absent ou
+ * si aucun champ nouveau n'est trouvé pour une table donnée.
+ */
+function augmentTablesWithSchema(schemaTables) {
+  if (!schemaTables || !schemaTables.length) return TABLES;
+  const out = {};
+  for (const key of Object.keys(TABLES)) {
+    const tbl = TABLES[key];
+    const schemaTable = schemaTables.find((t) => t.id === tbl.tableId);
+    if (!schemaTable) { out[key] = tbl; continue; }
+    const knownIds = new Set(tbl.fields.map((f) => f.i));
+    const extra = (schemaTable.fields || []).filter((f) => !knownIds.has(f.id));
+    if (!extra.length) { out[key] = tbl; continue; }
+    // Type Airtable brut reutilise tel quel : il correspond deja au format
+    // attendu par le frontend (voir public/app.js renderInput/displayValue),
+    // et READONLY_TYPES protege automatiquement contre l'ecriture des types
+    // qu'on ne sait pas gerer correctement (formula, rollup, etc.).
+    const extraFieldDefs = extra.map((f) => T(f.id, f.name, f.type));
+    out[key] = {
+      ...tbl,
+      fields: [...tbl.fields, ...extraFieldDefs],
+      detailFields: [...tbl.detailFields, ...extra.map((f) => f.id)],
+    };
+  }
+  return out;
+}
+
 module.exports = {
   TABLES,
   TABLE_ORDER,
@@ -473,4 +522,5 @@ module.exports = {
   permFor,
   fieldsIdToName,
   labelForRecord,
+  augmentTablesWithSchema,
 };
