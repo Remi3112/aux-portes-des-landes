@@ -112,11 +112,12 @@ function nameKeyedToIdKeyed(tableId, fieldsByName) {
   const tbl = findTableById(tableId);
   const out = {};
   // Inclut aussi les champs "ajoutes directement dans Airtable" (voir
-  // EXTRA_SCHEMA_FIELDS / TEST 7b) : le vrai serveur les resout via le schema
-  // Meta Airtable (augmentTablesWithSchema), donc le mock doit lui aussi
-  // savoir retrouver leur ID a partir de leur nom pour simuler fidelement
-  // l'ecriture cote Airtable.
-  const extra = EXTRA_SCHEMA_FIELDS[tableId] || [];
+  // EXTRA_SCHEMA_FIELDS / TEST 7b) et les champs crees dynamiquement en cours
+  // de test via airtable.ensureFieldOnTable (voir mockDynamicFields / TEST 7c)
+  // : le vrai serveur les resout via le schema Meta Airtable
+  // (augmentTablesWithSchema), donc le mock doit lui aussi savoir retrouver
+  // leur ID a partir de leur nom pour simuler fidelement l'ecriture Airtable.
+  const extra = (EXTRA_SCHEMA_FIELDS[tableId] || []).concat(mockDynamicFields[tableId] || []);
   Object.entries(fieldsByName || {}).forEach(([name, val]) => {
     const known = tbl && tbl.fields.find((f) => f.n === name);
     const extraField = !known && extra.find((f) => f.name === name);
@@ -132,6 +133,11 @@ let mockCallLog = [];
 // premiere fois qu'un compte doit etre lu/ecrit alors qu'Airtable est
 // connecte) — simule fidelement la creation ET la persistance de schema.
 let mockDynamicTables = [];
+// Champs crees dynamiquement sur une table EXISTANTE en cours de test, via
+// airtable.ensureFieldOnTable (POST /meta/bases/{baseId}/tables/{tableId}/fields)
+// — ex: le lien litige individuel par prestataire (voir TEST 7c). Cle =
+// tableId, valeur = liste de {id, name, type}.
+let mockDynamicFields = {};
 const realFetch = globalThis.fetch.bind(globalThis);
 
 globalThis.fetch = async function (url, options = {}) {
@@ -146,6 +152,18 @@ globalThis.fetch = async function (url, options = {}) {
   if (u.includes("api.airtable.com/v0/meta/bases/")) {
     const method = (options.method || "GET").toUpperCase();
     if (method === "POST") {
+      const fieldsRouteMatch = u.match(/\/tables\/([^/?]+)\/fields/);
+      if (fieldsRouteMatch) {
+        // Simule POST /meta/bases/{baseId}/tables/{tableId}/fields : creation
+        // d'un champ sur une table EXISTANTE (utilise par
+        // airtable.ensureFieldOnTable(), ex: lien litige par prestataire).
+        const targetTableId = fieldsRouteMatch[1];
+        const body = JSON.parse(options.body || "{}");
+        const newField = { id: "fldDyn" + crypto.randomBytes(6).toString("hex"), name: body.name, type: body.type };
+        if (!mockDynamicFields[targetTableId]) mockDynamicFields[targetTableId] = [];
+        mockDynamicFields[targetTableId].push(newField);
+        return jsonResponse(200, newField);
+      }
       // Simule POST /meta/bases/{baseId}/tables : creation d'une nouvelle
       // table (utilise par usersStore.ensureUsersTable()).
       const body = JSON.parse(options.body || "{}");
@@ -167,7 +185,7 @@ globalThis.fetch = async function (url, options = {}) {
         name: f.n,
         type: f.t,
         options: mockSchemaChoices[f.i] ? { choices: mockSchemaChoices[f.i] } : undefined,
-      })).concat(EXTRA_SCHEMA_FIELDS[t.tableId] || []),
+      })).concat(EXTRA_SCHEMA_FIELDS[t.tableId] || []).concat(mockDynamicFields[t.tableId] || []),
     })).concat(mockDynamicTables);
     return jsonResponse(200, { tables });
   }
@@ -315,11 +333,10 @@ async function run() {
   ok(r.status === 200 && r.json.user.role === "collaborateur", "compte collaborateur cree");
   r = await call("POST", "/api/auth/users", {
     username: "oihana", password: "Oihana123!", name: "Oihana", role: "prestataire",
-    email: "oihana@example.com", litigeFormUrl: "https://airtable.com/appTEST/shrOIHANA",
+    email: "oihana@example.com",
   }, adminCookie);
   ok(r.status === 200 && r.json.user.role === "prestataire", "compte prestataire cree (prenom = 'Oihana', identique a Airtable)");
   ok(r.json.user.email === "oihana@example.com", "l'email fourni a la creation est bien enregistre");
-  ok(r.json.user.litigeFormUrl === "https://airtable.com/appTEST/shrOIHANA", "le lien de formulaire de litige individuel est bien enregistre");
   const oihanaId = r.json.user.id;
   r = await call("POST", "/api/auth/users", { username: "collab", password: "x", name: "Doublon", role: "collaborateur" }, adminCookie);
   ok(r.status === 409, "impossible de creer deux comptes avec le meme identifiant");
@@ -329,10 +346,6 @@ async function run() {
   ok(r.status === 400, "un email invalide est rejete a la creation d'un compte");
   r = await call("POST", "/api/auth/users", { username: "emaildup", password: "x", name: "X", role: "collaborateur", email: "oihana@example.com" }, adminCookie);
   ok(r.status === 409, "impossible de creer deux comptes avec le meme email");
-  r = await call("POST", "/api/auth/users", { username: "badlitigeurl", password: "x", name: "X", role: "prestataire", litigeFormUrl: "pas-une-url" }, adminCookie);
-  ok(r.status === 400, "un lien de formulaire de litige invalide (pas http/https) est rejete a la creation");
-  r = await call("PATCH", `/api/auth/users/${oihanaId}`, { litigeFormUrl: "https://airtable.com/appTEST/shrOIHANA-V2" }, adminCookie);
-  ok(r.status === 200 && r.json.user.litigeFormUrl === "https://airtable.com/appTEST/shrOIHANA-V2", "un admin peut modifier le lien de formulaire de litige d'un prestataire existant");
   r = await call("POST", "/api/auth/users", { username: "collab2", password: "x", name: "Collab Deux", role: "collaborateur", email: "collab2@example.com" }, adminCookie);
   ok(r.status === 200, "compte collab2 cree avec un email distinct (pour tester le conflit ci-dessous)");
   r = await call("PATCH", `/api/auth/users/${oihanaId}`, { email: "collab2@example.com" }, adminCookie);
@@ -345,10 +358,6 @@ async function run() {
   r = await call("POST", "/api/auth/login", { username: "oihana", password: "Oihana123!", role: "prestataire" });
   ok(r.status === 200, "connexion prestataire reussie");
   let prestaCookie = r.cookie;
-  r = await call("GET", "/api/auth/me", null, prestaCookie);
-  ok(r.status === 200 && r.json.user.litigeFormUrl === "https://airtable.com/appTEST/shrOIHANA-V2", "le prestataire voit bien SON PROPRE lien de formulaire de litige via /me");
-  r = await call("GET", "/api/auth/me", null, collabCookie);
-  ok(r.status === 200 && r.json.user.litigeFormUrl === "", "un collaborateur (sans lien de litige associe) n'a pas de litigeFormUrl");
   r = await call("POST", "/api/auth/login", { username: "oihana", password: "MauvaisMdp", role: "prestataire" });
   ok(r.status === 401, "mauvais mot de passe refuse");
   r = await call("POST", "/api/auth/login", { username: "collab", password: "Collab123!", role: "admin" });
@@ -401,6 +410,26 @@ async function run() {
   r = await call("GET", "/api/records/proprietaires", null, adminCookie);
   const propRec = r.json.records.find((x) => x.id === propRecId);
   ok(propRec && propRec.fields.fldExtraTest0001 === "valeur test synchronisee", "la valeur ecrite sur le champ auto-decouvert est bien synchronisee avec Airtable");
+
+  console.log("\n== TEST 7c: Lien litige individuel par prestataire menage (Parametres > Agents de menage) ==");
+  r = await call("GET", "/api/settings/menage-litige-links", null, prestaCookie);
+  ok(r.status === 403, "un prestataire n'a pas acces a la liste des liens litige (reserve equipe interne)");
+  r = await call("GET", "/api/settings/menage-litige-links", null, collabCookie);
+  ok(r.status === 200 && r.json.items.length === 1 && r.json.items[0].prenom === "Oihana", "l'equipe interne voit la liste des agents de menage avec leur lien litige (vide au depart)");
+  const menageRecId = r.json.items[0].id;
+  ok(r.json.items[0].litigeUrl === "", "aucun lien litige n'est encore renseigne pour Oihana");
+  r = await call("PATCH", `/api/settings/menage-litige-links/${menageRecId}`, { url: "https://airtable.com/appTEST/shrOIHANA" }, collabCookie);
+  ok(r.status === 403, "un collaborateur ne peut pas modifier un lien litige (reserve admin)");
+  r = await call("PATCH", `/api/settings/menage-litige-links/${menageRecId}`, { url: "pas-une-url" }, adminCookie);
+  ok(r.status === 400, "un lien litige invalide (pas http/https) est rejete");
+  r = await call("PATCH", `/api/settings/menage-litige-links/${menageRecId}`, { url: "https://airtable.com/appTEST/shrOIHANA" }, adminCookie);
+  ok(r.status === 200 && r.json.ok, "un admin peut renseigner le lien litige d'un agent de menage");
+  r = await call("GET", "/api/settings/menage-litige-links", null, adminCookie);
+  ok(r.json.items[0].litigeUrl === "https://airtable.com/appTEST/shrOIHANA", "le lien litige enregistre est bien relu depuis Airtable");
+  r = await call("GET", "/api/settings/my-litige-link", null, prestaCookie);
+  ok(r.status === 200 && r.json.url === "https://airtable.com/appTEST/shrOIHANA", "le prestataire Oihana voit bien SON PROPRE lien litige (page Declarer un litige)");
+  r = await call("GET", "/api/settings/my-litige-link", null, collabCookie);
+  ok(r.status === 200 && r.json.url === null, "un profil non-prestataire n'a pas de lien litige (page reservee aux prestataires)");
 
   console.log("\n== TEST 8: Lecture des enregistrements Airtable avec scoping par role ==");
   r = await call("GET", "/api/records/logements", null, adminCookie);

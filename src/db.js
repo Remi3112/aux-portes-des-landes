@@ -248,7 +248,6 @@ async function migrateLocalUsersToAirtableIfNeeded(data, cfg) {
           emailVerified: u.emailVerified !== false,
           passwordHash: u.passwordHash,
           mustChangePassword: !!u.mustChangePassword,
-          litigeFormUrl: u.litigeFormUrl || "",
           verifyToken: u.verifyToken,
           verifyTokenExpires: u.verifyTokenExpires,
         });

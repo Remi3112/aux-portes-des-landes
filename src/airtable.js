@@ -107,6 +107,52 @@ async function getCachedBaseSchema() {
   return data;
 }
 
+// "Singleflight" (meme principe que src/usersStore.js ensureUsersTable) :
+// evite que deux requetes concurrentes ne cherchent chacune a creer le meme
+// champ en double sur Airtable avant que le cache de schema ne soit rempli.
+const ensureFieldPromises = {};
+
+/**
+ * Retrouve (ou cree si absent) un champ d'une table Airtable EXISTANTE, par
+ * son nom, et retourne son Field ID. Utilise pour les champs geres par
+ * l'application mais absents du schema Airtable tant qu'un admin ne les a
+ * pas "provisionnes" une premiere fois (ex : lien de litige individuel par
+ * prestataire menage, voir routes/settings.js).
+ */
+async function ensureFieldOnTable(tableId, fieldName, type, description) {
+  const cfg = assertConfigured();
+  const schema = await getCachedBaseSchema();
+  const schemaTable = schema.find((t) => t.id === tableId);
+  const existing = schemaTable && schemaTable.fields.find((f) => f.name === fieldName);
+  if (existing) return existing.id;
+
+  const key = `${cfg.baseId}::${tableId}::${fieldName}`;
+  if (ensureFieldPromises[key]) return ensureFieldPromises[key];
+  ensureFieldPromises[key] = (async () => {
+    const url = `https://api.airtable.com/v0/meta/bases/${cfg.baseId}/tables/${tableId}/fields`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cfg.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: fieldName, type, description }),
+    });
+    const text = await res.text();
+    let json; try { json = text ? JSON.parse(text) : {}; } catch (e) { json = {}; }
+    if (!res.ok) {
+      const msg = (json.error && (json.error.message || json.error.type)) || res.statusText || `HTTP ${res.status}`;
+      throw new Error(`Airtable (${res.status}) : ${msg}`);
+    }
+    // Invalide le cache de schema pour que le nouveau champ soit vu au
+    // prochain appel (ex: par augmentTablesWithSchema cote routes/config.js).
+    baseSchemaCache = { at: 0, data: null };
+    return json.id;
+  })();
+  try {
+    return await ensureFieldPromises[key];
+  } finally {
+    delete ensureFieldPromises[key];
+  }
+}
+
 /** Teste la connexion (utilisé par Paramètres > Intégrations > Tester). */
 async function testConnection(token, baseId) {
   const url = `https://api.airtable.com/v0/meta/bases/${baseId}/tables`;
@@ -119,4 +165,4 @@ async function testConnection(token, baseId) {
   return { ok: true, tableCount: (json.tables || []).length };
 }
 
-module.exports = { listRecords, createRecords, updateRecords, deleteRecords, getBaseSchema, getCachedBaseSchema, testConnection, getConfig };
+module.exports = { listRecords, createRecords, updateRecords, deleteRecords, getBaseSchema, getCachedBaseSchema, ensureFieldOnTable, testConnection, getConfig };

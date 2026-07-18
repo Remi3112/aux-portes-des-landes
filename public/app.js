@@ -430,9 +430,9 @@ function renderSidebar(){
     html += navItem("slack","💬","Messagerie Slack");
   }
   // Chaque prestataire menage ne voit QUE son propre lien de formulaire de
-  // litige (renseigne par l'admin dans Parametres > Utilisateurs) — jamais
-  // celui d'un autre prestataire : la donnee vient de CURRENT_USER (sa
-  // propre session), jamais d'une liste partagee entre comptes.
+  // litige (renseigne par un admin dans Parametres > Agents de menage,
+  // associe a sa fiche Airtable) — jamais celui d'un autre prestataire (voir
+  // /api/settings/my-litige-link, scope par nom cote serveur).
   if(CURRENT_USER.role==="prestataire"){
     html += navItem("declareLitige","⚠️","Déclarer un litige");
   }
@@ -550,12 +550,19 @@ async function renderDashboardPrestataire(){
  * que de sa propre session (/api/auth/me), jamais d'une liste partagee. */
 async function renderDeclareLitige(){
   const content = document.getElementById("content");
-  const url = CURRENT_USER.litigeFormUrl;
+  content.innerHTML = `<div class="loadingRow">Chargement…</div>`;
+  let url = null;
+  try{
+    ({ url } = await api("GET", "/api/settings/my-litige-link"));
+  }catch(e){
+    content.innerHTML = `<div class="card">Erreur : ${esc(e.message)}</div>`;
+    return;
+  }
   if(!url){
     content.innerHTML = `<div class="card">
       <h3 style="margin-top:0;">⚠️ Déclarer un litige</h3>
-      <p class="muted" style="margin-bottom:0;">Aucun lien de formulaire n'a encore été associé à ton compte.
-      Contacte un administrateur pour qu'il le renseigne dans Paramètres &gt; Utilisateurs.</p>
+      <p class="muted" style="margin-bottom:0;">Aucun lien de formulaire n'a encore été associé à ta fiche.
+      Contacte un administrateur pour qu'il le renseigne dans Paramètres &gt; Agents de ménage.</p>
     </div>`;
     return;
   }
@@ -1467,11 +1474,13 @@ async function renderSettings(){
     </div>`;
   }
   const usersHtml = CURRENT_USER.role==="admin" ? await renderUsersSection() : "";
+  const menageLitigeHtml = ["admin","collaborateur"].includes(CURRENT_USER.role) && CONFIG.integrationsStatus.airtable ? await renderMenageLitigeSection() : "";
   content.innerHTML = `
     ${integHtml}
     ${accessRightsHtml}
     ${waTemplatesHtml}
     ${formLinksHtml}
+    ${menageLitigeHtml}
     ${usersHtml}
     <div class="card"><h3 style="margin-top:0;">Mon compte</h3>
       <div class="field"><label>Nouveau mot de passe</label>${pwField("myNewPass", {placeholder:"Laisser vide pour ne pas changer"})}</div>
@@ -1636,8 +1645,8 @@ async function saveIntegration(name, payload){
 async function renderUsersSection(){
   const { users } = await api("GET", "/api/auth/users");
   return `<div class="card"><h3 style="margin-top:0;">Utilisateurs (${users.length})</h3>
-    <p class="desc">Renseigne un numéro de téléphone pour qu'un compte apparaisse dans Messagerie WhatsApp &gt; Collaborateurs. Pour un <b>prestataire ménage</b>, renseigne son lien de formulaire Airtable individuel : c'est le seul lien qu'il verra, dans sa page "Déclarer un litige".</p>
-    <table class="dataTable"><thead><tr><th>Nom</th><th>Identifiant</th><th>Profil</th><th>Statut</th><th>Téléphone</th><th>Email</th><th>Lien litige (prestataire)</th><th></th></tr></thead><tbody>
+    <p class="desc">Renseigne un numéro de téléphone pour qu'un compte apparaisse dans Messagerie WhatsApp &gt; Collaborateurs. Pour un <b>prestataire ménage</b>, son lien de déclaration de litige se règle dans <b>Paramètres &gt; Agents de ménage</b> (associé à sa fiche Airtable, pas à son compte de connexion).</p>
+    <table class="dataTable"><thead><tr><th>Nom</th><th>Identifiant</th><th>Profil</th><th>Statut</th><th>Téléphone</th><th>Email</th><th></th></tr></thead><tbody>
     ${users.map(u=>`<tr data-user-id="${u.id}">
       <td>${esc(u.name)}</td>
       <td>${esc(u.username)}</td>
@@ -1645,9 +1654,6 @@ async function renderUsersSection(){
       <td>${u.emailVerified?'<span class="pill ok">actif</span>':'<span class="pill off">en attente de validation</span>'}</td>
       <td><input class="userPhoneInput" value="${esc(u.phone||'')}" placeholder="0600000000" style="width:120px;padding:5px 8px;font-size:12.5px;"></td>
       <td><input class="userEmailInput" type="email" value="${esc(u.email||'')}" placeholder="email@exemple.fr" style="width:160px;padding:5px 8px;font-size:12.5px;"></td>
-      <td>${u.role==="prestataire"
-        ? `<input class="userLitigeUrlInput" type="url" value="${esc(u.litigeFormUrl||'')}" placeholder="https://airtable.com/appXXX/shrXXX" style="width:200px;padding:5px 8px;font-size:12.5px;">`
-        : '<span class="muted" style="font-size:11.5px;">— réservé aux prestataires —</span>'}</td>
       <td style="display:flex;gap:6px;flex-wrap:wrap;">
         <button class="btn small secondary" data-save-user="${u.id}">Enregistrer</button>
         ${!u.emailVerified?`<button class="btn small secondary" data-mark-verified="${u.id}" title="Activer manuellement (email de validation perdu ou non reçu)">Marquer vérifié</button>`:''}
@@ -1664,17 +1670,45 @@ async function renderUsersSection(){
         <div class="field"><label>Profil</label><select id="newRole"><option value="collaborateur">Collaborateur</option><option value="prestataire">Prestataire ménage</option><option value="admin">Administrateur</option></select></div>
         <div class="field"><label>Téléphone (optionnel)</label><input id="newUserPhone" placeholder="0600000000"></div>
         <div class="field"><label>Email (optionnel)</label><input id="newUserEmail" type="email" placeholder="prenom@exemple.fr"></div>
-        <div class="field" id="newUserLitigeUrlField" style="display:none;"><label>Lien formulaire Airtable — Déclarer un litige</label><input id="newUserLitigeUrl" type="url" placeholder="https://airtable.com/appXXX/shrXXX"></div>
       </div>
       <button class="btn" id="addUserBtn" style="margin-top:10px;">Ajouter</button>
       <p class="muted" style="font-size:11.5px;margin-top:10px;">Pour un prestataire ménage, utilise exactement le même prénom que dans la table "Agents de ménage" pour que son planning s'affiche automatiquement.</p>
     </div>
   </div>`;
 }
-document.addEventListener("change", (e)=>{
-  if(e.target && e.target.id==="newRole"){
-    const field = document.getElementById("newUserLitigeUrlField");
-    if(field) field.style.display = e.target.value==="prestataire" ? "" : "none";
+/**
+ * Liens individuels de declaration de litige, par prestataire de menage —
+ * stockes DIRECTEMENT dans Airtable (table Agents de menage), pas dans le
+ * compte de connexion. Chaque prestataire ne voit que le sien (voir
+ * renderDeclareLitige et /api/settings/my-litige-link), jamais celui d'un
+ * autre.
+ */
+async function renderMenageLitigeSection(){
+  try{
+    var { items } = await api("GET", "/api/settings/menage-litige-links");
+  }catch(e){
+    return `<div class="card"><h3 style="margin-top:0;">Agents de ménage — Liens litige</h3><p class="desc">${esc(e.message)}</p></div>`;
+  }
+  return `<div class="card"><h3 style="margin-top:0;">Agents de ménage — Liens litige (${items.length})</h3>
+    <p class="desc">Un lien par prestataire de ménage, vers son formulaire Airtable individuel de déclaration de litige/incident. C'est le seul lien que ce prestataire verra, dans sa page "Déclarer un litige". Enregistré directement dans Airtable (table Agents de ménage).</p>
+    <table class="dataTable"><thead><tr><th>Prénom</th><th>Nom</th><th>Téléphone</th><th>Lien litige</th><th></th></tr></thead><tbody>
+    ${items.map(it=>`<tr data-menage-id="${it.id}">
+      <td>${esc(it.prenom)}</td>
+      <td>${esc(it.nom)}</td>
+      <td>${esc(it.telephone)}</td>
+      <td><input class="menageLitigeUrlInput" type="url" value="${esc(it.litigeUrl||'')}" placeholder="https://airtable.com/appXXX/shrXXX" style="width:260px;padding:5px 8px;font-size:12.5px;"></td>
+      <td><button class="btn small secondary" data-save-menage-litige="${it.id}">Enregistrer</button></td>
+    </tr>`).join("")}
+    </tbody></table>
+    ${!items.length ? `<p class="muted">Aucun agent de ménage trouvé dans Airtable.</p>` : ""}
+  </div>`;
+}
+document.addEventListener("click", async (e)=>{
+  if(e.target && e.target.dataset && e.target.dataset.saveMenageLitige){
+    const row = e.target.closest("[data-menage-id]");
+    const url = row.querySelector(".menageLitigeUrlInput").value.trim();
+    try{ await api("PATCH", `/api/settings/menage-litige-links/${e.target.dataset.saveMenageLitige}`, { url }); showToast("Lien enregistré."); }
+    catch(err){ alert(err.message); }
   }
 });
 document.addEventListener("click", async (e)=>{
@@ -1685,18 +1719,15 @@ document.addEventListener("click", async (e)=>{
     const role = document.getElementById("newRole").value;
     const phone = document.getElementById("newUserPhone").value.trim();
     const email = document.getElementById("newUserEmail").value.trim();
-    const litigeFormUrl = role==="prestataire" ? document.getElementById("newUserLitigeUrl").value.trim() : "";
     if(!name||!username||!password){ alert("Merci de remplir tous les champs."); return; }
-    try{ await api("POST", "/api/auth/users", { name, username, password, role, phone, email, litigeFormUrl }); showToast("Utilisateur ajouté."); renderApp(); }
+    try{ await api("POST", "/api/auth/users", { name, username, password, role, phone, email }); showToast("Utilisateur ajouté."); renderApp(); }
     catch(err){ alert(err.message); }
   }
   if(e.target && e.target.dataset && e.target.dataset.saveUser){
     const row = e.target.closest("[data-user-id]");
     const phone = row.querySelector(".userPhoneInput").value.trim();
     const email = row.querySelector(".userEmailInput").value.trim();
-    const litigeInput = row.querySelector(".userLitigeUrlInput");
     const payload = { phone, email };
-    if(litigeInput) payload.litigeFormUrl = litigeInput.value.trim();
     try{ await api("PATCH", `/api/auth/users/${e.target.dataset.saveUser}`, payload); showToast("Utilisateur mis à jour."); }
     catch(err){ alert(err.message); }
   }

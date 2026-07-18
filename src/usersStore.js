@@ -38,7 +38,6 @@ const F = {
   emailVerified: "Email verifie",
   passwordHash: "Mot de passe (hash)",
   mustChangePassword: "Doit changer mot de passe",
-  litigeFormUrl: "Lien litige (prestataire)",
   verifyToken: "Jeton verification",
   verifyTokenExpires: "Expiration jeton",
 };
@@ -119,7 +118,6 @@ async function ensureUsersTable(cfg) {
           { name: F.emailVerified, type: "checkbox", options: { icon: "check", color: "greenBright" } },
           { name: F.passwordHash, type: "singleLineText" },
           { name: F.mustChangePassword, type: "checkbox", options: { icon: "check", color: "yellowBright" } },
-          { name: F.litigeFormUrl, type: "url" },
           { name: F.verifyToken, type: "singleLineText" },
           { name: F.verifyTokenExpires, type: "number", options: { precision: 0 } },
         ],
@@ -151,7 +149,6 @@ function recordToUser(rec) {
     emailVerified: f[F.emailVerified] !== false,
     passwordHash: f[F.passwordHash] || "",
     mustChangePassword: !!f[F.mustChangePassword],
-    litigeFormUrl: f[F.litigeFormUrl] || "",
     verifyToken: f[F.verifyToken] || undefined,
     verifyTokenExpires: f[F.verifyTokenExpires] || undefined,
     createdAt: rec.createdTime,
@@ -168,7 +165,6 @@ function userToFields(u) {
   if (u.emailVerified !== undefined) fields[F.emailVerified] = !!u.emailVerified;
   if (u.passwordHash !== undefined) fields[F.passwordHash] = u.passwordHash;
   if (u.mustChangePassword !== undefined) fields[F.mustChangePassword] = !!u.mustChangePassword;
-  if (u.litigeFormUrl !== undefined) fields[F.litigeFormUrl] = u.litigeFormUrl;
   // verifyToken/verifyTokenExpires : "suppression" = valeur vide/nulle (pas
   // de notion de "delete" d'un champ Airtable individuel).
   if ("verifyToken" in u) fields[F.verifyToken] = u.verifyToken || "";

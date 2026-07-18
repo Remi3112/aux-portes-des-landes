@@ -19,11 +19,6 @@ function publicUser(u) {
     // => considere verifie de longue date, pour ne jamais bloquer une installation existante.
     emailVerified: u.emailVerified !== false,
     mustChangePassword: !!u.mustChangePassword,
-    // Lien de formulaire Airtable individuel (prestataire menage uniquement)
-    // pour declarer un litige — chaque prestataire ne voit QUE son propre
-    // lien, jamais celui des autres (voir /api/auth/me et la section
-    // "Declarer un litige" cote frontend).
-    litigeFormUrl: u.litigeFormUrl || "",
   };
 }
 
@@ -219,7 +214,7 @@ router.get("/users", requireAdmin, async (req, res) => {
 });
 
 router.post("/users", requireAdmin, async (req, res) => {
-  const { username, password, name, role, phone, email: emailAddr, litigeFormUrl } = req.body || {};
+  const { username, password, name, role, phone, email: emailAddr } = req.body || {};
   if (!username || !password || !name || !role) return res.status(400).json({ error: "Tous les champs sont requis." });
   if (!["admin", "collaborateur", "prestataire"].includes(role)) return res.status(400).json({ error: "Profil invalide." });
   if (await findUser(username)) {
@@ -235,21 +230,12 @@ router.post("/users", requireAdmin, async (req, res) => {
       return res.status(409).json({ error: "Un compte existe déjà avec cette adresse email." });
     }
   }
-  // Lien de formulaire Airtable individuel (declaration de litige) : propre a
-  // chaque prestataire, saisi librement par l'admin (n'importe quelle URL
-  // http(s)), pertinent surtout pour le profil "prestataire" mais pas
-  // restreint techniquement aux autres profils.
-  const cleanLitigeUrl = (litigeFormUrl || "").trim();
-  if (cleanLitigeUrl && !isValidHttpUrl(cleanLitigeUrl)) {
-    return res.status(400).json({ error: "Le lien du formulaire de litige doit commencer par http:// ou https://" });
-  }
   const user = await db.createUser({
     username: username.trim(),
     name: name.trim(),
     role,
     phone: (phone || "").trim(),
     email: cleanEmail,
-    litigeFormUrl: cleanLitigeUrl,
     passwordHash: hashPassword(password),
     mustChangePassword: true,
   });
@@ -261,7 +247,7 @@ router.post("/users", requireAdmin, async (req, res) => {
 // passe se change via /change-password, l'identifiant et le profil restent
 // fixes une fois le compte cree pour eviter toute confusion de session).
 router.patch("/users/:id", requireAdmin, async (req, res) => {
-  const { name, phone, emailVerified, email: emailAddr, litigeFormUrl } = req.body || {};
+  const { name, phone, emailVerified, email: emailAddr } = req.body || {};
   const u = await db.findUserById(req.params.id);
   if (!u) return res.status(404).json({ error: "Utilisateur introuvable." });
   const patch = {};
@@ -281,16 +267,6 @@ router.patch("/users/:id", requireAdmin, async (req, res) => {
     }
     patch.email = cleanEmail;
   }
-  // Lien de formulaire Airtable individuel (declaration de litige) — voir
-  // POST /users plus haut pour le detail. Modifiable a tout moment par un
-  // admin, ex. pour associer/mettre a jour le lien d'un prestataire menage.
-  if (litigeFormUrl !== undefined) {
-    const cleanLitigeUrl = (litigeFormUrl || "").trim();
-    if (cleanLitigeUrl && !isValidHttpUrl(cleanLitigeUrl)) {
-      return res.status(400).json({ error: "Le lien du formulaire de litige doit commencer par http:// ou https://" });
-    }
-    patch.litigeFormUrl = cleanLitigeUrl;
-  }
   // Filet de securite : permet a un admin d'activer manuellement un compte
   // inscrit via /signup si l'email de validation est perdu, expire, ou si
   // l'envoi d'email n'est pas (encore) configure.
@@ -305,7 +281,6 @@ router.patch("/users/:id", requireAdmin, async (req, res) => {
     req.session.user.name = updated.name;
     req.session.user.phone = updated.phone;
     req.session.user.email = updated.email;
-    req.session.user.litigeFormUrl = updated.litigeFormUrl;
   }
   res.json({ user: publicUser(updated) });
 });

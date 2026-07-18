@@ -7,6 +7,17 @@ const ai = require("../src/ai");
 const email = require("../src/email");
 const { requireAuth, requireAdmin } = require("../src/auth");
 const { TABLES, TABLE_ORDER, ACCESS_LEVELS, permFor } = require("../src/tables");
+const { scopeForRole, rawText } = require("../src/scope");
+
+// Nom du champ Airtable (table "Agents de menage") qui porte le lien
+// individuel de declaration de litige de chaque prestataire. Provisionne
+// automatiquement (voir airtable.ensureFieldOnTable) la premiere fois qu'un
+// admin ouvre Parametres > Agents de menage, ou qu'un prestataire ouvre
+// Declarer un litige — jamais besoin de le creer a la main dans Airtable.
+const MENAGE_LITIGE_FIELD_NAME = "Lien litige (déclarer un incident)";
+const MENAGE_LITIGE_FIELD_DESC =
+  "Lien individuel vers le formulaire Airtable de declaration de litige de ce prestataire de menage. " +
+  "Gere depuis Parametres > Agents de menage dans l'application — ne pas renommer ce champ.";
 
 const FORM_LINK_AUDIENCES = ["voyageur", "prestataire", "proprietaire", "collaborateur", "tous"];
 // Meme jeu de valeurs pour les modeles WhatsApp (Parametres > Modeles
@@ -244,6 +255,77 @@ router.delete("/form-links/:id", requireAdmin, (req, res) => {
   if (data.formLinks.length === before) return res.status(404).json({ error: "Lien introuvable." });
   db.save(data);
   res.json({ ok: true });
+});
+
+// ---- Liens litige individuels par prestataire menage (Parametres > Agents
+// de menage) ----
+// Contrairement aux autres reglages de Parametres (stockes dans data/db.json),
+// ce lien est stocke DIRECTEMENT dans Airtable, sur la table "Agents de
+// menage" elle-meme (voir MENAGE_LITIGE_FIELD_NAME) : c'est la table qui fait
+// deja foi pour savoir quel prestataire est associe a quel(s) logement(s), et
+// ca evite de dupliquer cette information entre Airtable et l'application.
+// Le champ est cree automatiquement dans Airtable au premier appel si besoin
+// (voir airtable.ensureFieldOnTable) — jamais besoin de le creer a la main.
+router.get("/menage-litige-links", requireAuth, requireTeamAccess, async (req, res) => {
+  try {
+    const fieldId = await airtable.ensureFieldOnTable(
+      TABLES.menage.tableId,
+      MENAGE_LITIGE_FIELD_NAME,
+      "url",
+      MENAGE_LITIGE_FIELD_DESC
+    );
+    const records = await airtable.listRecords(TABLES.menage.tableId, { pageSize: 200 });
+    const items = records.map((r) => ({
+      id: r.id,
+      nom: rawText(r.fields.fld3VZR2uFZVnsl28),
+      prenom: rawText(r.fields.fld3hjQS2PC9Zf6ru),
+      telephone: rawText(r.fields.fldRbzJpuWfZmxLAs),
+      litigeUrl: r.fields[fieldId] || "",
+    }));
+    res.json({ items });
+  } catch (e) {
+    res.status(e.code === "AIRTABLE_NOT_CONFIGURED" ? 409 : 502).json({ error: e.message });
+  }
+});
+
+router.patch("/menage-litige-links/:id", requireAdmin, async (req, res) => {
+  const url = (req.body && req.body.url) || "";
+  const cleanUrl = url.trim();
+  if (cleanUrl && !/^https?:\/\//i.test(cleanUrl)) {
+    return res.status(400).json({ error: "Le lien doit commencer par http:// ou https://" });
+  }
+  try {
+    await airtable.ensureFieldOnTable(TABLES.menage.tableId, MENAGE_LITIGE_FIELD_NAME, "url", MENAGE_LITIGE_FIELD_DESC);
+    // Ecriture par NOM de champ (voir note dans src/airtable.js) : fiable
+    // quel que soit le Field ID, meme si le champ vient d'etre cree.
+    await airtable.updateRecords(TABLES.menage.tableId, [{ id: req.params.id, fields: { [MENAGE_LITIGE_FIELD_NAME]: cleanUrl } }]);
+    db.addActivity({ type: "update", user: req.session.user.username, table: "menage", recordId: req.params.id });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(e.code === "AIRTABLE_NOT_CONFIGURED" ? 409 : 502).json({ error: e.message });
+  }
+});
+
+// Lien litige propre au prestataire connecte (page "Declarer un litige") :
+// jamais de liste partagee entre comptes, uniquement SA propre fiche Agent
+// de menage (meme logique de scope que /api/records/menage cote prestataire).
+router.get("/my-litige-link", requireAuth, async (req, res) => {
+  if (req.session.user.role !== "prestataire") return res.json({ url: null });
+  try {
+    const fieldId = await airtable.ensureFieldOnTable(
+      TABLES.menage.tableId,
+      MENAGE_LITIGE_FIELD_NAME,
+      "url",
+      MENAGE_LITIGE_FIELD_DESC
+    );
+    const records = await airtable.listRecords(TABLES.menage.tableId, { pageSize: 200 });
+    const normalized = records.map((r) => ({ id: r.id, fields: r.fields }));
+    const mine = scopeForRole(TABLES.menage, normalized, req.session.user);
+    const rec = mine[0];
+    res.json({ url: (rec && rec.fields[fieldId]) || null });
+  } catch (e) {
+    res.status(e.code === "AIRTABLE_NOT_CONFIGURED" ? 409 : 502).json({ error: e.message });
+  }
 });
 
 // ---- Droits d'acces par profil (Parametres > Droits d'acces, admin uniquement) ----
