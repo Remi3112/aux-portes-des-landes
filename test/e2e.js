@@ -95,6 +95,16 @@ const mockSchemaChoices = {
   ],
 };
 
+// Vues Airtable simulees, exposees par le schema Meta (voir "Get base
+// schema" -> chaque table a un tableau "views"). Sert a verifier le
+// selecteur de vues (ex: "5 étoiles" sur Avis voyageurs, voir TEST 7d).
+const MOCK_VIEWS = {
+  [TABLES.avis.tableId]: [
+    { id: "viwAvisGrid", name: "Grid view", type: "grid" },
+    { id: "viw5Etoiles", name: "5 étoiles", type: "grid" },
+  ],
+};
+
 // Simule un champ ajoute directement dans Airtable APRES coup (sans
 // modification du code de l'application) : le schema Meta Airtable le
 // contient, mais src/tables.js ne le decrit pas encore. Sert a verifier
@@ -186,6 +196,7 @@ globalThis.fetch = async function (url, options = {}) {
         type: f.t,
         options: mockSchemaChoices[f.i] ? { choices: mockSchemaChoices[f.i] } : undefined,
       })).concat(EXTRA_SCHEMA_FIELDS[t.tableId] || []).concat(mockDynamicFields[t.tableId] || []),
+      views: MOCK_VIEWS[t.tableId] || [],
     })).concat(mockDynamicTables);
     return jsonResponse(200, { tables });
   }
@@ -430,6 +441,19 @@ async function run() {
   ok(r.status === 200 && r.json.url === "https://airtable.com/appTEST/shrOIHANA", "le prestataire Oihana voit bien SON PROPRE lien litige (page Declarer un litige)");
   r = await call("GET", "/api/settings/my-litige-link", null, collabCookie);
   ok(r.status === 200 && r.json.url === null, "un profil non-prestataire n'a pas de lien litige (page reservee aux prestataires)");
+
+  console.log("\n== TEST 7d: Vues Airtable (switch de vue sur Avis voyageurs) ==");
+  r = await call("GET", "/api/records/avis/views", null, adminCookie);
+  ok(r.status === 200 && r.json.views.length === 2 && r.json.views[1].name === "5 étoiles", "les vues Airtable (Grid view + 5 étoiles) sont bien exposees pour Avis voyageurs");
+  mockCallLog = [];
+  r = await call("GET", "/api/records/avis?view=viw5Etoiles", null, adminCookie);
+  ok(r.status === 200, "la lecture des avis filtres par une vue Airtable precise fonctionne");
+  const viewCall = mockCallLog.find((c) => c.url.includes(TABLES.avis.tableId) && c.url.includes("view=viw5Etoiles"));
+  ok(!!viewCall, "le parametre de vue est bien transmis a l'API Airtable (le filtre/tri de la vue s'applique cote Airtable)");
+  r = await call("GET", "/api/records/logements/views", null, adminCookie);
+  ok(r.status === 200 && r.json.views.length === 0, "une table sans vue additionnelle definie ne renvoie aucune vue (pas de selecteur inutile)");
+  r = await call("GET", "/api/records/avis/views", null, prestaCookie);
+  ok(r.status === 403, "un prestataire n'a pas acces aux vues d'une table qu'il ne peut pas lire");
 
   console.log("\n== TEST 8: Lecture des enregistrements Airtable avec scoping par role ==");
   r = await call("GET", "/api/records/logements", null, adminCookie);

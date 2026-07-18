@@ -48,12 +48,17 @@ async function airtableFetch(pathSuffix, options = {}) {
   return json;
 }
 
-async function listRecords(tableId, { pageSize = 100, filterByFormula, sort } = {}) {
+async function listRecords(tableId, { pageSize = 100, filterByFormula, sort, view } = {}) {
   const params = new URLSearchParams();
   params.set("pageSize", String(Math.min(pageSize, 100)));
   params.set("returnFieldsByFieldId", "true"); // reponses indexees par Field ID (stable meme si un champ est renomme)
   if (filterByFormula) params.set("filterByFormula", filterByFormula);
   if (sort) sort.forEach((s, i) => { params.set(`sort[${i}][field]`, s.field); params.set(`sort[${i}][direction]`, s.direction || "asc"); });
+  // Restreint aux enregistrements (et a l'ordre/tri) d'une VUE Airtable
+  // precise (ex: "5 etoiles" sur Avis voyageurs) — Airtable applique alors
+  // lui-meme le filtre et le tri configures dans cette vue. Accepte un nom
+  // ou un ID de vue.
+  if (view) params.set("view", view);
 
   let all = [];
   let offset;
@@ -153,6 +158,18 @@ async function ensureFieldOnTable(tableId, fieldName, type, description) {
   }
 }
 
+/**
+ * Liste les vues Airtable (Grid view, vues filtrees/triees creees a la
+ * main dans Airtable, ex: "5 etoiles" sur Avis voyageurs) d'une table donnee.
+ * Le schema Meta Airtable inclut deja les vues de chaque table (pas d'appel
+ * reseau supplementaire : reutilise le cache de getCachedBaseSchema).
+ */
+async function getViews(tableId) {
+  const schema = await getCachedBaseSchema();
+  const schemaTable = schema.find((t) => t.id === tableId);
+  return (schemaTable && schemaTable.views) || [];
+}
+
 /** Teste la connexion (utilisé par Paramètres > Intégrations > Tester). */
 async function testConnection(token, baseId) {
   const url = `https://api.airtable.com/v0/meta/bases/${baseId}/tables`;
@@ -165,4 +182,4 @@ async function testConnection(token, baseId) {
   return { ok: true, tableCount: (json.tables || []).length };
 }
 
-module.exports = { listRecords, createRecords, updateRecords, deleteRecords, getBaseSchema, getCachedBaseSchema, ensureFieldOnTable, testConnection, getConfig };
+module.exports = { listRecords, createRecords, updateRecords, deleteRecords, getBaseSchema, getCachedBaseSchema, getViews, ensureFieldOnTable, testConnection, getConfig };

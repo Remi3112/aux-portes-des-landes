@@ -42,11 +42,33 @@ router.get("/:tableKey", requireAuth, async (req, res) => {
   if (!tbl) return res.status(404).json({ error: "Table inconnue." });
   if (!can(req.session.user.role, tableKey, "read")) return res.status(403).json({ error: "Accès non autorisé pour ton profil." });
   try {
-    const records = await airtable.listRecords(tbl.tableId, { pageSize: 1000 });
+    // ?view=<id ou nom de vue Airtable> : restreint (et trie) les
+    // enregistrements selon une vue precise (ex: "5 etoiles" sur Avis
+    // voyageurs) — voir aussi GET /:tableKey/views ci-dessous.
+    const records = await airtable.listRecords(tbl.tableId, { pageSize: 1000, view: req.query.view || undefined });
     const normalized = records.map((r) => ({ id: r.id, createdTime: r.createdTime, fields: r.fields }));
     const scoped = scopeForRole(tbl, normalized, req.session.user);
     const linkedLabels = await buildLinkedLabels(tbl);
     res.json({ records: scoped, linkedLabels });
+  } catch (e) {
+    res.status(e.code === "AIRTABLE_NOT_CONFIGURED" ? 409 : 502).json({ error: e.message });
+  }
+});
+
+/**
+ * Vues Airtable disponibles pour une table (Grid view par defaut, plus toute
+ * vue filtree/triee creee a la main dans Airtable, ex: "5 etoiles" sur Avis
+ * voyageurs). Permet au frontend de proposer un selecteur de vue quand il y
+ * en a plusieurs (voir public/app.js renderTableView).
+ */
+router.get("/:tableKey/views", requireAuth, async (req, res) => {
+  const { tableKey } = req.params;
+  const tbl = TABLES[tableKey];
+  if (!tbl) return res.status(404).json({ error: "Table inconnue." });
+  if (!can(req.session.user.role, tableKey, "read")) return res.status(403).json({ error: "Accès non autorisé pour ton profil." });
+  try {
+    const views = await airtable.getViews(tbl.tableId);
+    res.json({ views: views.map((v) => ({ id: v.id, name: v.name, type: v.type })) });
   } catch (e) {
     res.status(e.code === "AIRTABLE_NOT_CONFIGURED" ? 409 : 502).json({ error: e.message });
   }

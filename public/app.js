@@ -593,17 +593,12 @@ async function renderTableView(key){
     <div class="toolbar">
       <input type="text" id="searchBox" placeholder="Rechercher...">
       ${filterFid ? `<select id="quickFilter"><option value="">Tous les statuts</option></select>` : ""}
+      <span id="viewSelectWrap"></span>
       <span class="muted" id="countLabel"></span>
     </div>
     <div class="card" style="padding:0;overflow-x:auto;"><div id="tableWrap" class="loadingRow">Chargement…</div></div>`;
   let records = [];
   let currentLinkedLabels = {};
-  try{
-    ({ records, linkedLabels: currentLinkedLabels } = await api("GET", `/api/records/${key}`));
-  }catch(e){
-    document.getElementById("tableWrap").innerHTML = `<div class="emptyState">${esc(e.message)}</div>`;
-    return;
-  }
   let currentFilterValue = "";
   function applyFilters(){
     const q = document.getElementById("searchBox").value.toLowerCase();
@@ -616,7 +611,22 @@ async function renderTableView(key){
     renderRowsInto("tableWrap", key, filtered, true, currentLinkedLabels);
     return filtered;
   }
-  renderRowsInto("tableWrap", key, records, true, currentLinkedLabels);
+  // Charge les enregistrements pour une VUE Airtable donnee (ou la vue par
+  // defaut si viewId est vide) — voir le selecteur de vues plus bas, utilise
+  // par exemple sur Avis voyageurs pour basculer vers une vue "5 étoiles"
+  // deja filtree/triee dans Airtable.
+  async function loadRecords(viewId){
+    document.getElementById("tableWrap").innerHTML = `<div class="loadingRow">Chargement…</div>`;
+    try{
+      const qs = viewId ? `?view=${encodeURIComponent(viewId)}` : "";
+      ({ records, linkedLabels: currentLinkedLabels } = await api("GET", `/api/records/${key}${qs}`));
+    }catch(e){
+      document.getElementById("tableWrap").innerHTML = `<div class="emptyState">${esc(e.message)}</div>`;
+      return;
+    }
+    applyFilters();
+  }
+  await loadRecords("");
   document.getElementById("searchBox").addEventListener("input", applyFilters);
   if(filterFid){
     api("GET", `/api/records/${key}/choices/${filterFid}`).then(({choices})=>{
@@ -626,6 +636,18 @@ async function renderTableView(key){
       sel.addEventListener("change", ()=>{ currentFilterValue = sel.value; applyFilters(); });
     }).catch(()=>{});
   }
+  // Selecteur de vues Airtable : n'apparait que s'il y a au moins une vue en
+  // plus de la vue par defaut (sinon rien a switcher, on evite le bruit).
+  api("GET", `/api/records/${key}/views`).then(({views})=>{
+    if(!views || views.length < 2) return;
+    const wrap = document.getElementById("viewSelectWrap");
+    if(!wrap) return;
+    wrap.innerHTML = `<select id="viewSelect" title="Vue Airtable">
+      <option value="">Toutes les lignes (vue par défaut)</option>
+      ${views.map(v=>`<option value="${esc(v.id)}">${esc(v.name)}</option>`).join("")}
+    </select>`;
+    document.getElementById("viewSelect").addEventListener("change", (e)=> loadRecords(e.target.value));
+  }).catch(()=>{});
   document.getElementById("exportCsvBtn").onclick = ()=>{
     const visible = applyFilters();
     exportRecordsToCsv(tbl, visible);
